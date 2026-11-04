@@ -1,17 +1,20 @@
 package dev.plex.command;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import dev.plex.ECCModule;
 import dev.plex.ecc.safety.ChatSafety;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+import org.bukkit.command.CommandSender;
+import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletionException;
 
 public class ECCCommand extends SimplePlexCommand
 {
@@ -39,47 +42,39 @@ public class ECCCommand extends SimplePlexCommand
                 return messageComponent("chatSafetyOff");
             }
             ChatSafety.Status status = safety.status();
-            String host = status.hostReady() == null ? "<yellow>not contacted yet</yellow>"
-                    : status.hostReady() ? "<green>ready</green>" : "<red>not scoring</red>";
-            sender.sendMessage(messageComponent("chatSafetyHost",
-                    Placeholder.parsed("state", host),
-                    Placeholder.unparsed("detail", status.hostDetail()),
-                    Placeholder.unparsed("since", ago(status.hostSince()))));
-            sender.sendMessage(messageComponent("chatSafetyBundle",
-                    Placeholder.unparsed("bundle", status.bundle() == null ? "none read yet" : status.bundle()),
-                    Placeholder.unparsed("backlog", String.valueOf(status.backlog()))));
-            sender.sendMessage(messageComponent("chatSafetyPending",
-                    Placeholder.unparsed("count", String.valueOf(status.pending().size())),
-                    Placeholder.unparsed("players", names(status.pending()))));
-            return slowCheck(status);
+            String link = status.reachable() == null ? "<yellow>not contacted yet</yellow>"
+                    : status.reachable() ? "<green>reachable</green>" : "<red>unreachable</red>";
+            sender.sendMessage(messageComponent("chatSafetyLink",
+                    Placeholder.parsed("state", link),
+                    Placeholder.unparsed("detail", status.detail()),
+                    Placeholder.unparsed("since", ago(status.since())),
+                    Placeholder.unparsed("buffered", String.valueOf(status.buffered())),
+                    Placeholder.unparsed("unacknowledged", String.valueOf(status.unacknowledged())),
+                    Placeholder.unparsed("muted", String.valueOf(status.muted()))));
+            safety.serverStatus().whenComplete((server, failure) -> showServer(sender, server, failure));
+            return null;
         })));
     }
 
-    private Component slowCheck(ChatSafety.Status status)
+    // Each field of ECC-Server's GET /status on its own line, as the server reports it.
+    private void showServer(CommandSender sender, @Nullable JsonObject server, @Nullable Throwable failure)
     {
-        String state;
-        if (status.bedrockAnswering() == null)
+        if (failure != null)
         {
-            state = "<yellow>not called yet</yellow>";
+            Throwable cause = failure instanceof CompletionException && failure.getCause() != null
+                    ? failure.getCause() : failure;
+            sender.sendMessage(messageComponent("chatSafetyServerUnavailable",
+                    Placeholder.unparsed("reason", String.valueOf(cause.getMessage()))));
+            return;
         }
-        else if (status.bedrockAnswering())
+        sender.sendMessage(messageComponent("chatSafetyServer"));
+        for (Map.Entry<String, JsonElement> field : server.entrySet())
         {
-            state = "<green>answering</green> for " + ago(status.bedrockSince());
+            JsonElement value = field.getValue();
+            sender.sendMessage(messageComponent("chatSafetyServerField",
+                    Placeholder.unparsed("field", field.getKey()),
+                    Placeholder.unparsed("value", value.isJsonPrimitive() ? value.getAsString() : value.toString())));
         }
-        else
-        {
-            state = "<red>failing</red> for " + ago(status.bedrockSince()) + " <dark_gray>("
-                    + MiniMessage.miniMessage().escapeTags(status.bedrockFailure()) + ")</dark_gray>";
-        }
-        return messageComponent("chatSafetySlowCheck",
-                Placeholder.parsed("state", state),
-                Placeholder.unparsed("checking", names(status.checking())),
-                Placeholder.unparsed("held", names(status.held())));
-    }
-
-    private static String names(List<String> players)
-    {
-        return players.isEmpty() ? "none" : String.join(", ", players);
     }
 
     private static String ago(Instant since)

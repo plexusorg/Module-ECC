@@ -1,31 +1,23 @@
 package dev.plex.ecc.safety;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import dev.plex.ECCModule;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.IOException;
 import java.sql.SQLException;
-import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
- * Chat safety: capture, the flood and duplicate rule, the fast check, and the trigger. It exists only while its
- * switch is on and its settings are valid.
+ * Chat safety's part in the game: it captures what players say and forwards it to ECC-Server, keeps the mute set
+ * ECC-Server decides, and carries out ECC-Server's actions. It exists only while its switch is on and its settings
+ * are valid.
  */
 public final class ChatSafety
 {
@@ -41,50 +33,31 @@ public final class ChatSafety
     // Public chat, /me and /nick are one conversation.
     public static final String PUBLIC_CONVERSATION = CHAT;
 
-    private static final long REPEAT_MILLIS = Duration.ofSeconds(60).toMillis();
-    private static final int FLOOD_PLAYERS = 3;
-    // Transcript kept for a pending state: more than the classifier's largest window (29 earlier lines).
-    private static final int HISTORY_LINES = 40;
-    private static final int HISTORY_KEYS = 1024;
-
-    private final ECCModule module;
-    private final RecordLog record;
-    private final Pending pending;
-    private final Scorer scorer;
-    private final Outcomes outcomes;
-    private final SlowCheck slowCheck;
-    private final Object lock = new Object();
-    // Guarded by lock. Both maps are in time order of their last update, oldest first.
-    private final Map<String, Repeat> repeats = new LinkedHashMap<>();
-    private final Map<String, Flood> floods = new LinkedHashMap<>();
-    private final Map<String, ArrayDeque<Message>> conversations = bounded();
-    private final Map<UUID, ArrayDeque<Message>> players = bounded();
-    private volatile boolean closed;
+    private final EccServer server;
+    private final MuteSet muted;
+    private final Outbox outbox;
+    private final Bans bans;
+    private final Actions actions;
 
     private ChatSafety(ECCModule module, SafetySettings settings)
     {
-        this.module = module;
-        this.record = new RecordLog(module.getDataFolder().toPath().resolve("chat-safety"), settings.server(),
-                settings.recordRetentionDays(), module.getLogger());
-        this.pending = new Pending(module.api().storage().forModule(module), module.getLogger());
-        this.scorer = new Scorer(new ModelHost(settings.modelHost()), module.getLogger(), settings.queueSize(),
-                this::finish);
-        this.outcomes = new Outcomes(module, record, settings.kickMin(), settings.kickMax());
-        this.slowCheck = new SlowCheck(pending, record,
-                new Bedrock(settings.bedrockRegion(), settings.bedrockModel(), settings.bedrockToken()), outcomes,
-                scorer::decision, module.getLogger(), settings.heldCap());
+        this.server = new EccServer(settings.eccServer(), module.getLogger());
+        this.muted = new MuteSet(module.api().storage().forModule(module));
+        this.outbox = new Outbox(server, module.getLogger());
+        this.bans = new Bans(module, muted);
+        this.actions = new Actions(server, muted, bans, module.getLogger());
     }
 
     /**
      * Starts chat safety when its settings are valid. Otherwise logs each invalid setting and returns null.
      *
-     * @throws IllegalStateException when its record folder or pending state cannot be opened
+     * @throws IllegalStateException when its saved mute set cannot be read
      */
     @Nullable
     public static ChatSafety start(ECCModule module, ConfigurationSection section)
     {
         List<String> errors = new ArrayList<>();
-        SafetySettings settings = SafetySettings.read(section, module.getDataFolder().toPath().resolve(".env"), errors);
+        SafetySettings settings = SafetySettings.read(section, errors);
         if (settings == null)
         {
             errors.forEach(error -> module.getLogger().error("Invalid chat safety setting: {}", error));
@@ -94,263 +67,72 @@ public final class ChatSafety
         ChatSafety safety = new ChatSafety(module, settings);
         try
         {
-            // Lifecycle work before capture starts: the schema must exist and every pending player must be known,
-            // so a pending player is shadow-muted from the first message.
-            safety.pending.load();
-            safety.record.start();
+            // Lifecycle work before capture starts, so a saved mute applies from the first message.
+            safety.muted.load();
         }
-        catch (SQLException | IOException | RuntimeException ex)
+        catch (SQLException | RuntimeException ex)
         {
-            safety.close();
-            throw new IllegalStateException("Chat safety could not open its pending state or record", ex);
+            safety.server.close();
+            throw new IllegalStateException("Chat safety could not read its saved mute set", ex);
         }
-        safety.scorer.start();
-        safety.pending.entries().forEach(entry -> safety.slowCheck.check(entry.uuid(), entry.name()));
-        module.getLogger().info("Chat safety is on; {} players are pending", safety.pending.entries().size());
+        safety.outbox.start();
+        safety.actions.start();
+        module.getLogger().info("Chat safety is on with ECC-Server at {}; {} players are muted", settings.eccServer(),
+                safety.muted.size());
         return safety;
     }
 
-    // Pending players, and players banned by a verdict until their kick.
     public boolean isShadowMuted(UUID uuid)
     {
-        return pending.contains(uuid) || outcomes.awaitingKick(uuid);
+        return muted.contains(uuid);
     }
 
     /**
-     * Captures a message a player sent. A shadowed message reached only its sender; it is recorded, kept for a
-     * pending player's slow check, and not scored.
+     * Forwards a message a player sent. {@code shadowed} means it reached only its sender (muted or quarantined);
+     * a player with the staff permission is marked {@code bypass}.
      */
     public void capture(Player player, String channel, String conversation, @Nullable UUID targetUuid,
                         @Nullable String target, String text, boolean shadowed)
     {
-        if (closed || text.isBlank())
+        if (text.isBlank())
         {
             return;
         }
-        UUID uuid = player.getUniqueId();
-        Message message = new Message(Instant.now(), uuid, player.getName(), channel, conversation, targetUuid, target,
-                text, shadowed);
-        if (shadowed)
-        {
-            finish(message, Verdict.unchecked(Verdict.SHADOWED));
-            pending.addLater(uuid, message.toJson());
-            slowCheck.check(uuid, player.getName());
-            return;
-        }
-        if (player.hasPermission(BYPASS_PERMISSION))
-        {
-            remember(message);
-            finish(message, Verdict.unchecked(Verdict.BYPASS));
-            return;
-        }
-        admit(message);
-    }
-
-    // The flood and duplicate rule, then the player's queue.
-    private void admit(Message message)
-    {
-        long now = message.time().toEpochMilli();
-        Message original;
-        String rule;
-        synchronized (lock)
-        {
-            remember(message);
-            expire(now);
-            String repeatKey = message.speakerUuid() + "\u001f" + message.conversation();
-            Repeat repeat = repeats.remove(repeatKey);
-            if (repeat != null && repeat.message().text().equals(message.text()))
-            {
-                // A player's exact repeat within 60 seconds of their previous copy reuses that copy's verdict.
-                repeats.put(repeatKey, new Repeat(repeat.message(), now));
-                original = repeat.message();
-                rule = "repeat";
-            }
-            else
-            {
-                repeats.put(repeatKey, new Repeat(message, now));
-                original = flood(message, now);
-                rule = "flood";
-            }
-        }
-        if (original == null)
-        {
-            scorer.submit(message);
-            return;
-        }
-        original.verdict().thenAccept(verdict -> finish(message, verdict.reusedBy(rule, original.id())));
-    }
-
-    // When three or more players send the same text within 60 seconds of its first copy, later copies reuse the first
-    // copy's verdict. Returns that first copy, or null when this message is checked itself.
-    @Nullable
-    private Message flood(Message message, long now)
-    {
-        String key = DuplicateKey.of(message.text());
-        if (key.isEmpty())
-        {
-            return null;
-        }
-        Flood flood = floods.get(key);
-        if (flood == null)
-        {
-            floods.put(key, new Flood(message, now, new HashSet<>(Set.of(message.speakerUuid()))));
-            return null;
-        }
-        flood.players().add(message.speakerUuid());
-        boolean reuse = flood.players().size() >= FLOOD_PLAYERS
-                && !flood.first().speakerUuid().equals(message.speakerUuid());
-        return reuse ? flood.first() : null;
-    }
-
-    private void expire(long now)
-    {
-        Iterator<Repeat> oldRepeats = repeats.values().iterator();
-        while (oldRepeats.hasNext() && now - oldRepeats.next().time() > REPEAT_MILLIS)
-        {
-            oldRepeats.remove();
-        }
-        Iterator<Flood> oldFloods = floods.values().iterator();
-        while (oldFloods.hasNext() && now - oldFloods.next().time() > REPEAT_MILLIS)
-        {
-            oldFloods.remove();
-        }
-    }
-
-    // Keeps the message in its conversation's and its author's transcript for a later pending state, and gives it its
-    // conversation as it stands now, so a trigger scored late still sees the lines said before it and none after.
-    private void remember(Message message)
-    {
-        synchronized (lock)
-        {
-            ArrayDeque<Message> conversation = conversations.computeIfAbsent(message.conversation(),
-                    key -> new ArrayDeque<>());
-            append(conversation, message);
-            append(players.computeIfAbsent(message.speakerUuid(), key -> new ArrayDeque<>()), message);
-            message.context(List.copyOf(conversation));
-        }
-    }
-
-    private static void append(ArrayDeque<Message> lines, Message message)
-    {
-        lines.addLast(message);
-        if (lines.size() > HISTORY_LINES)
-        {
-            lines.pollFirst();
-        }
-    }
-
-    private void finish(Message message, Verdict verdict)
-    {
-        if (!message.verdict().complete(verdict))
-        {
-            return;
-        }
-        List<Message> context = message.takeContext();
-        JsonObject line = message.toJson();
-        line.addProperty("type", "message");
-        record.append(line);
-        if (verdict.triggered())
-        {
-            trigger(message, verdict, context == null ? List.of(message) : context);
-        }
-    }
-
-    // Shadow-mutes the player on every captured channel and persists what the slow check needs: the conversation up
-    // to and including the trigger, and in `later` the player's own lines said after it.
-    private void trigger(Message message, Verdict verdict, List<Message> context)
-    {
-        Decision parameters = verdict.parameters();
-        Verdict.Score score = verdict.score();
-        if (closed || parameters == null || score == null || pending.contains(message.speakerUuid()))
-        {
-            return;
-        }
-        Instant now = Instant.now();
-        JsonObject state = new JsonObject();
-        state.addProperty("player", message.speaker());
-        state.addProperty("player_uuid", message.speakerUuid().toString());
-        state.addProperty("triggered_at", now.toString());
-        state.add("trigger", message.toJson());
-        state.add("decision", parameters.toJson());
-        state.add("conversation", transcript(context));
-        synchronized (lock)
-        {
-            state.add("player_messages", transcript(players.get(message.speakerUuid())));
-            state.add("later", transcript(saidAfter(message)));
-        }
-        if (!pending.add(message.speakerUuid(), message.speaker(), now, state))
-        {
-            return;
-        }
-        slowCheck.check(message.speakerUuid(), message.speaker());
-        JsonObject line = new JsonObject();
-        line.addProperty("type", "decision");
-        line.addProperty("ts", now.toString());
-        line.addProperty("decision", Verdict.TRIGGER);
-        line.addProperty("speaker", message.speaker());
-        line.addProperty("speaker_uuid", message.speakerUuid().toString());
-        line.addProperty("message_id", message.id());
-        line.addProperty("p_ban", score.pBan());
-        line.addProperty("version", score.version());
-        line.addProperty("trigger_threshold", parameters.trigger());
-        record.append(line);
-    }
-
-    // The trigger's author's lines in its conversation said after it and before the shadow mute; all of their lines
-    // when the trigger has already left the kept transcript, since every line kept then is newer. Guarded by lock.
-    private List<Message> saidAfter(Message trigger)
-    {
-        List<Message> later = new ArrayList<>();
-        ArrayDeque<Message> lines = conversations.get(trigger.conversation());
-        if (lines == null)
-        {
-            return later;
-        }
-        boolean after = !lines.contains(trigger);
-        for (Message line : lines)
-        {
-            if (line == trigger)
-            {
-                after = true;
-            }
-            else if (after && line.speakerUuid().equals(trigger.speakerUuid()))
-            {
-                later.add(line);
-            }
-        }
-        return later;
-    }
-
-    private static JsonArray transcript(@Nullable Collection<Message> lines)
-    {
-        JsonArray transcript = new JsonArray();
-        if (lines != null)
-        {
-            lines.forEach(line -> transcript.add(line.toJson()));
-        }
-        return transcript;
+        JsonObject message = new JsonObject();
+        message.addProperty("id", UUID.randomUUID().toString());
+        message.addProperty("channel", channel);
+        message.addProperty("conversation", conversation);
+        message.addProperty("speaker_uuid", player.getUniqueId().toString());
+        message.addProperty("speaker", player.getName());
+        // Gson writes a null value as JSON null.
+        message.addProperty("target_uuid", targetUuid == null ? null : targetUuid.toString());
+        message.addProperty("target", target);
+        message.addProperty("text", text);
+        message.addProperty("shadowed", shadowed);
+        message.addProperty("bypass", player.hasPermission(BYPASS_PERMISSION));
+        outbox.add(player.getUniqueId(), message);
     }
 
     public Status status()
     {
-        Scorer.HostState host = scorer.state();
-        Decision decision = scorer.decision();
-        SlowCheck.Status slow = slowCheck.status();
-        return new Status(host.ready(), host.detail(), host.since(), decision == null ? null : decision.version(),
-                scorer.backlog(), pending.entries().stream().map(Pending.Entry::name)
-                .sorted(String.CASE_INSENSITIVE_ORDER).toList(), slow.answering(), slow.failure(), slow.since(),
-                slow.checking(), slow.held());
+        EccServer.State link = server.state();
+        return new Status(link.reachable(), link.detail(), link.since(), outbox.size(), actions.unacknowledged(),
+                muted.size());
     }
 
+    // ECC-Server's GET /status, completed on the HTTP client's thread.
+    public CompletableFuture<JsonObject> serverStatus()
+    {
+        return server.status();
+    }
+
+    // Stops the action loop first, so no ban starts while the waiting kicks are carried out.
     public void close()
     {
-        closed = true;
-        // The scorer records every message it did not score before the record and pending state close.
-        scorer.close();
-        slowCheck.close();
-        outcomes.close();
-        record.close();
-        pending.close();
+        actions.close();
+        bans.close();
+        outbox.close();
+        server.close();
     }
 
     // Private messages and mail between two players are one conversation.
@@ -367,34 +149,12 @@ public final class ChatSafety
         return channel + "/" + player;
     }
 
-    private static <K> Map<K, ArrayDeque<Message>> bounded()
-    {
-        return new LinkedHashMap<>(16, 0.75f, true)
-        {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<K, ArrayDeque<Message>> eldest)
-            {
-                return size() > HISTORY_KEYS;
-            }
-        };
-    }
-
     /**
-     * Chat safety as {@code /ecc status} shows it. {@code hostReady} is null before the first contact with the host,
-     * {@code bedrockAnswering} before the first slow-check call. {@code checking} are pending players awaiting a
-     * verdict, {@code held} those whose last verdict was not sure yet.
+     * Chat safety as {@code /ecc status} shows it. {@code reachable} is null before the first contact with
+     * ECC-Server. {@code unacknowledged} are actions received and not yet acknowledged as done.
      */
-    public record Status(@Nullable Boolean hostReady, String hostDetail, Instant hostSince, @Nullable String bundle,
-                         int backlog, List<String> pending, @Nullable Boolean bedrockAnswering, String bedrockFailure,
-                         @Nullable Instant bedrockSince, List<String> checking, List<String> held)
-    {
-    }
-
-    private record Repeat(Message message, long time)
-    {
-    }
-
-    private record Flood(Message first, long time, Set<UUID> players)
+    public record Status(@Nullable Boolean reachable, String detail, Instant since, int buffered, int unacknowledged,
+                         int muted)
     {
     }
 }

@@ -1,6 +1,5 @@
 package dev.plex.ecc.safety;
 
-import com.google.gson.JsonObject;
 import dev.plex.ECCModule;
 import dev.plex.api.player.PlexPlayerView;
 import dev.plex.api.punishment.IndefiniteBanRequest;
@@ -23,41 +22,37 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * The outcomes of verdicts that ban: the indefinite-ban entry written through Plex, then the kick after a random delay.
- * A player stays shadow-muted from the verdict until the kick. The screens and reasons are fixed templates from
+ * Carries out ECC-Server's bans: the indefinite-ban entry written through Plex, then the kick at the time the server
+ * chose. The player is muted from the ban until the kick. The screens and reasons are fixed templates from
  * messages.yml; the offender is kicked with Plex's own indefinite-ban screen, which their next login shows too.
  */
-final class Outcomes
+final class Bans
 {
+    static final String OFFENDER = "offender";
+    static final String AT_RISK = "at_risk";
     private static final long WRITE_SECONDS = 30;
     private static final long TICK_MILLIS = 50;
 
     private final ECCModule module;
     private final Logger logger;
-    private final RecordLog record;
-    private final Duration kickMin;
-    private final Duration kickMax;
+    private final MuteSet muted;
     private final String offenderReason;
     private final String atRiskReason;
     private final String welfareScreen;
     private final Component offenderKick;
     private final Component welfareKick;
-    private final Object lock = new Object();
-    // Players banned this run who are still online: the kick screen each is waiting for.
+    // Banned players who are online: the kick screen each is waiting for.
     private final Map<UUID, Component> awaitingKick = new ConcurrentHashMap<>();
 
-    Outcomes(ECCModule module, RecordLog record, Duration kickMin, Duration kickMax)
+    Bans(ECCModule module, MuteSet muted)
     {
         this.module = module;
         this.logger = module.getLogger();
-        this.record = record;
-        this.kickMin = kickMin;
-        this.kickMax = kickMax;
+        this.muted = muted;
         this.offenderReason = module.messageString("chatSafetyOffenderReason");
         this.atRiskReason = module.messageString("chatSafetyAtRiskReason");
         this.welfareScreen = module.messageString("chatSafetyWelfareScreen");
@@ -68,58 +63,42 @@ final class Outcomes
                 Placeholder.unparsed("reason", offenderReason));
     }
 
-    boolean awaitingKick(UUID uuid)
-    {
-        return awaitingKick.containsKey(uuid);
-    }
-
     /**
-     * Writes the player's indefinite-ban entry (UUID, name and IP) for an offender or at-risk verdict, then schedules
-     * their kick. A player whose UUID is already indefinitely banned gets no second entry. Returns false when the entry
-     * could not be written, so the verdict must be applied again.
+     * Writes the indefinite-ban entry {@code ecc-<action id>} (UUID, name and IP) unless it exists, then schedules the
+     * kick. Runs on the action loop's thread.
+     *
+     * @return what was done, for the acknowledgement
+     * @throws Failed when the entry could not be written; the ban is applied again
      */
-    boolean ban(UUID uuid, String name, String role, String cause) throws InterruptedException
+    String ban(Actions.Action action) throws Failed, InterruptedException
     {
-        boolean atRisk = Evidence.AT_RISK.equals(role);
-        Component screen = atRisk ? welfareKick : offenderKick;
-        synchronized (lock)
+        UUID uuid = action.uuid();
+        boolean atRisk = AT_RISK.equals(action.role());
+        muted.add(uuid, action.name());
+        // Bukkit's player lookup by UUID reads a concurrent map on Folia, so it is safe off a region thread.
+        Player player = Bukkit.getPlayer(uuid);
+        String label = "ecc-" + action.idText();
+        PunishmentsApi bans = module.api().punishments();
+        String written = "entry " + label + " exists";
+        if (bans.indefiniteBanByLabel(label).isEmpty())
         {
-            PunishmentsApi bans = module.api().punishments();
-            // Bukkit's player lookup by UUID reads a concurrent map on Folia, so it is safe off a region thread.
-            Player player = Bukkit.getPlayer(uuid);
-            if (bans.indefiniteBanByUuid(uuid).isPresent())
-            {
-                action(uuid, name, "already_banned", role, cause, null);
-                kick(uuid, name, player, screen);
-                return true;
-            }
-            String label = "ecc-" + uuid + "-" + Instant.now().toEpochMilli();
             IndefiniteBanRequest request = new IndefiniteBanRequest(label, atRisk ? atRiskReason : offenderReason,
-                    atRisk ? welfareScreen : "", List.of(name), List.of(uuid), ip(uuid, player));
-            boolean created;
+                    atRisk ? welfareScreen : "", List.of(action.name()), List.of(uuid), ip(uuid, player));
             try
             {
-                created = bans.createIndefiniteBan(request).get(WRITE_SECONDS, TimeUnit.SECONDS);
+                if (bans.createIndefiniteBan(request).get(WRITE_SECONDS, TimeUnit.SECONDS))
+                {
+                    written = "wrote entry " + label;
+                }
             }
             catch (ExecutionException | TimeoutException | IllegalArgumentException ex)
             {
-                logger.error("Unable to write the chat safety ban of {} ({}); the verdict is applied again", name, uuid,
+                logger.error("Unable to write the chat safety ban of {} ({}); it is applied again", action.name(), uuid,
                         ex);
-                action(uuid, name, "ban_failed", role, cause, String.valueOf(ex));
-                return false;
+                throw new Failed("unable to write entry " + label + ": " + ex);
             }
-            if (!created)
-            {
-                // The label holds the time in milliseconds, so the next attempt uses a new one.
-                logger.error("An indefinite ban labeled {} already exists; the chat safety ban of {} is applied again",
-                        label, name);
-                action(uuid, name, "ban_failed", role, cause, "label exists: " + label);
-                return false;
-            }
-            action(uuid, name, "banned", role, cause, label);
-            kick(uuid, name, player, screen);
-            return true;
         }
+        return written + "; " + kick(uuid, player, atRisk ? welfareKick : offenderKick, action.kickAt());
     }
 
     // The online player's address, else the last IP Plex recorded for them, else none.
@@ -146,47 +125,37 @@ final class Outcomes
         }
     }
 
-    // Kicks an online player after a random delay on their own scheduler; they stay shadow-muted until then.
-    private void kick(UUID uuid, String name, @Nullable Player player, Component screen)
+    // Kicks an online player at the given time on their own scheduler; they stay muted until then.
+    private String kick(UUID uuid, @Nullable Player player, Component screen, Instant at)
     {
-        if (player == null || awaitingKick.putIfAbsent(uuid, screen) != null)
+        if (player == null)
         {
-            return;
+            muted.remove(uuid);
+            return "offline, not kicked";
         }
-        long delay = ThreadLocalRandom.current().nextLong(kickMin.toMillis(), kickMax.toMillis() + 1);
+        if (awaitingKick.putIfAbsent(uuid, screen) != null)
+        {
+            return "kick already scheduled";
+        }
+        long delay = Math.max(1, Math.ceilDiv(Duration.between(Instant.now(), at).toMillis(), TICK_MILLIS));
         ScheduledTask task = player.getScheduler().runDelayed(module.plugin(), scheduled ->
         {
-            awaitingKick.remove(uuid);
             player.kick(screen, PlayerKickEvent.Cause.BANNED);
-        }, () -> awaitingKick.remove(uuid), Math.max(1, delay / TICK_MILLIS));
+            kicked(uuid);
+        }, () -> kicked(uuid), delay);
         if (task == null)
         {
-            awaitingKick.remove(uuid);
-            return;
+            kicked(uuid);
+            return "offline, not kicked";
         }
         module.ownTask(task);
-        action(uuid, name, "kick_scheduled", null, null, delay / 1000 + " seconds");
+        return "kick at " + at;
     }
 
-    void action(UUID uuid, String name, String action, @Nullable String role, @Nullable String cause,
-                @Nullable String detail)
+    private void kicked(UUID uuid)
     {
-        JsonObject line = new JsonObject();
-        line.addProperty("type", "slow_action");
-        line.addProperty("ts", Instant.now().toString());
-        line.addProperty("player", name);
-        line.addProperty("player_uuid", uuid.toString());
-        line.addProperty("action", action);
-        if (role != null)
-        {
-            line.addProperty("role", role);
-            line.addProperty("cause", cause);
-        }
-        if (detail != null)
-        {
-            line.addProperty("detail", detail);
-        }
-        record.append(line);
+        awaitingKick.remove(uuid);
+        muted.remove(uuid);
     }
 
     // Kicks every banned player still waiting for their kick, since the delayed kicks end with the module.
@@ -201,5 +170,16 @@ final class Outcomes
             }
         });
         awaitingKick.clear();
+    }
+
+    /**
+     * The ban entry could not be written.
+     */
+    static final class Failed extends Exception
+    {
+        Failed(String reason)
+        {
+            super(reason);
+        }
     }
 }
