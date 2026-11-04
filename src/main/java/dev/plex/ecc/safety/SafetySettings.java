@@ -8,24 +8,15 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.util.List;
-import java.util.regex.Pattern;
 
-public record SafetySettings(String server, URI eccServer)
+public record SafetySettings(URI eccServer)
 {
-    private static final Pattern SERVER_NAME = Pattern.compile("[a-z0-9_-]{1,32}");
-
     // Returns null after adding a line to errors for each invalid setting.
     @Nullable
     public static SafetySettings read(ConfigurationSection section, List<String> errors)
     {
-        int before = errors.size();
-        String server = section.getString("server", "");
-        if (!SERVER_NAME.matcher(server).matches())
-        {
-            errors.add("chat_safety.server '" + server + "' must be 1 to 32 lowercase letters, digits, - or _");
-        }
         URI eccServer = eccServer(section.getString("model_host", ""), errors);
-        return errors.size() == before ? new SafetySettings(server, eccServer) : null;
+        return eccServer == null ? null : new SafetySettings(eccServer);
     }
 
     @Nullable
