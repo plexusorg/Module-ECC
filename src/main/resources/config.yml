@@ -41,3 +41,20 @@ chat_safety:
 
   # How many days the daily chat records are kept
   record_retention_days: 180
+
+  # The slow check: Kimi on Amazon Bedrock. Its API key goes in this module's .env file as
+  # AWS_BEARER_TOKEN_BEDROCK=<key>; chat safety stays off without it. Use a region that serves the model's
+  # inference profile (us.* profiles run in us-east-1, us-east-2 and us-west-2).
+  bedrock:
+    region: "us-east-1"
+    model: "us.moonshotai.kimi-k3"
+
+  # A ban is written at the verdict; the player is kicked this many minutes later, chosen at random, and stays
+  # shadow-muted until then. An offline player is not kicked.
+  kick_delay_minutes:
+    min: 2
+    max: 10
+
+  # After this many minutes of "not sure yet" verdicts, not counting time while Bedrock was failing, the player's
+  # shadow mute is lifted with no ban
+  held_cap_minutes: 10

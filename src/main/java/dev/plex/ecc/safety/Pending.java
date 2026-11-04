@@ -6,6 +6,7 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import dev.plex.api.storage.ModuleStorage;
 import org.apache.logging.log4j.Logger;
+import org.jetbrains.annotations.Nullable;
 
 import java.sql.SQLException;
 import java.time.Instant;
@@ -68,6 +69,72 @@ final class Pending
     Collection<Entry> entries()
     {
         return entries.values();
+    }
+
+    // A copy of the player's state, or null when they are not pending.
+    @Nullable
+    JsonObject snapshot(UUID uuid)
+    {
+        Entry entry = entries.get(uuid);
+        if (entry == null)
+        {
+            return null;
+        }
+        synchronized (entry)
+        {
+            return entry.state().deepCopy();
+        }
+    }
+
+    // Sets one number in the player's state.
+    void set(UUID uuid, String key, long value)
+    {
+        Entry entry = entries.get(uuid);
+        if (entry == null)
+        {
+            return;
+        }
+        synchronized (entry)
+        {
+            entry.state().addProperty(key, value);
+        }
+        persist(entry);
+    }
+
+    // Ends the player's pending state, which lifts the shadow mute, and deletes their row.
+    void remove(UUID uuid)
+    {
+        Entry entry = entries.remove(uuid);
+        if (entry == null)
+        {
+            return;
+        }
+        entry.markRemoved();
+        try
+        {
+            writer.execute(() -> delete(entry));
+        }
+        catch (RejectedExecutionException ex)
+        {
+            logger.error("Chat safety stopped before it could delete the pending state of {}; it returns at the next"
+                    + " start", entry.uuid());
+        }
+    }
+
+    private void delete(Entry entry)
+    {
+        try
+        {
+            storage.jdbi().useHandle(handle -> handle.createUpdate("DELETE FROM " + table + " WHERE player_uuid = :uuid")
+                    .bind("uuid", entry.uuid().toString())
+                    .execute());
+        }
+        catch (RuntimeException ex)
+        {
+            logger.error("Unable to delete the chat safety pending state of {}; retrying in {} seconds", entry.uuid(),
+                    RETRY_SECONDS, ex);
+            writer.schedule(() -> delete(entry), RETRY_SECONDS, TimeUnit.SECONDS);
+        }
     }
 
     // Records a trigger. Returns false when the player is already pending.
@@ -150,6 +217,10 @@ final class Pending
     private void write(Entry entry)
     {
         String state = entry.takeState();
+        if (state == null)
+        {
+            return;
+        }
         try
         {
             storage.jdbi().useTransaction(handle ->
@@ -208,6 +279,8 @@ final class Pending
         private final JsonObject state;
         // Guarded by this entry's monitor: a write of the latest state is queued or waiting to be retried.
         private boolean unsaved;
+        // Guarded by this entry's monitor: the row is deleted, so no write may insert it again.
+        private boolean removed;
 
         private Entry(UUID uuid, String name, Instant triggeredAt, JsonObject state)
         {
@@ -245,15 +318,22 @@ final class Pending
             return queue;
         }
 
+        // The state to write, or null once the row is deleted.
+        @Nullable
         private synchronized String takeState()
         {
             unsaved = false;
-            return state.toString();
+            return removed ? null : state.toString();
         }
 
         private synchronized boolean unsaved()
         {
-            return unsaved;
+            return unsaved && !removed;
+        }
+
+        private synchronized void markRemoved()
+        {
+            removed = true;
         }
     }
 }

@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -24,6 +25,9 @@ final class Message
     private final String text;
     private final boolean shadowed;
     private final CompletableFuture<Verdict> verdict = new CompletableFuture<>();
+    // Guarded by this message's monitor. Its conversation up to and including it, as it stood when it was said. It is
+    // dropped once the message is finished, so finished messages never hold one another.
+    private @Nullable List<Message> context;
 
     Message(Instant time, UUID speakerUuid, String speaker, String channel, String conversation,
             @Nullable UUID targetUuid, @Nullable String target, String text, boolean shadowed)
@@ -59,9 +63,28 @@ final class Message
         return speaker;
     }
 
+    String channel()
+    {
+        return channel;
+    }
+
     String conversation()
     {
         return conversation;
+    }
+
+    synchronized void context(List<Message> lines)
+    {
+        context = lines;
+    }
+
+    // The message's context, or null when it has none or it was already taken.
+    @Nullable
+    synchronized List<Message> takeContext()
+    {
+        List<Message> lines = context;
+        context = null;
+        return lines;
     }
 
     String text()

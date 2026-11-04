@@ -29,3 +29,10 @@ chatSafetyOff: "<red>Chat safety is not running. The server log says why."
 chatSafetyHost: "<gray>Model host: <state> for <since> <dark_gray>(<detail>)"
 chatSafetyBundle: "<gray>Bundle: <yellow><bundle></yellow>. Waiting to be scored: <yellow><backlog></yellow>."
 chatSafetyPending: "<gray>Pending players (<yellow><count></yellow>): <players>"
+chatSafetySlowCheck: "<gray>Bedrock: <state>. Awaiting a verdict: <yellow><checking></yellow>. Not sure yet: <yellow><held></yellow>."
+# The reason stored in the indefinite-ban entry of an offender; Plex's indefinite-ban screen shows it with the appeal link
+chatSafetyOffenderReason: "Sexual chat, which is not allowed here."
+# The reason stored in the indefinite-ban entry of a player at risk. Their login and kick screen is the welfare screen.
+chatSafetyAtRiskReason: "Paused for safety"
+# Stored in the entry of a player at risk, so it is the screen of every later login; editing it changes only new entries
+chatSafetyWelfareScreen: "You are not in trouble. Something in chat worried us, so we paused your account to keep you safe. Please read: totalfreedom.tf/pages/welfare"

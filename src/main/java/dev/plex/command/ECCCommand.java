@@ -5,10 +5,13 @@ import dev.plex.ECCModule;
 import dev.plex.ecc.safety.ChatSafety;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 public class ECCCommand extends SimplePlexCommand
 {
@@ -45,10 +48,38 @@ public class ECCCommand extends SimplePlexCommand
             sender.sendMessage(messageComponent("chatSafetyBundle",
                     Placeholder.unparsed("bundle", status.bundle() == null ? "none read yet" : status.bundle()),
                     Placeholder.unparsed("backlog", String.valueOf(status.backlog()))));
-            return messageComponent("chatSafetyPending",
+            sender.sendMessage(messageComponent("chatSafetyPending",
                     Placeholder.unparsed("count", String.valueOf(status.pending().size())),
-                    Placeholder.unparsed("players", status.pending().isEmpty() ? "none" : String.join(", ", status.pending())));
+                    Placeholder.unparsed("players", names(status.pending()))));
+            return slowCheck(status);
         })));
+    }
+
+    private Component slowCheck(ChatSafety.Status status)
+    {
+        String state;
+        if (status.bedrockAnswering() == null)
+        {
+            state = "<yellow>not called yet</yellow>";
+        }
+        else if (status.bedrockAnswering())
+        {
+            state = "<green>answering</green> for " + ago(status.bedrockSince());
+        }
+        else
+        {
+            state = "<red>failing</red> for " + ago(status.bedrockSince()) + " <dark_gray>("
+                    + MiniMessage.miniMessage().escapeTags(status.bedrockFailure()) + ")</dark_gray>";
+        }
+        return messageComponent("chatSafetySlowCheck",
+                Placeholder.parsed("state", state),
+                Placeholder.unparsed("checking", names(status.checking())),
+                Placeholder.unparsed("held", names(status.held())));
+    }
+
+    private static String names(List<String> players)
+    {
+        return players.isEmpty() ? "none" : String.join(", ", players);
     }
 
     private static String ago(Instant since)

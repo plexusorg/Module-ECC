@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -50,6 +51,8 @@ public final class ChatSafety
     private final RecordLog record;
     private final Pending pending;
     private final Scorer scorer;
+    private final Outcomes outcomes;
+    private final SlowCheck slowCheck;
     private final Object lock = new Object();
     // Guarded by lock. Both maps are in time order of their last update, oldest first.
     private final Map<String, Repeat> repeats = new LinkedHashMap<>();
@@ -66,6 +69,10 @@ public final class ChatSafety
         this.pending = new Pending(module.api().storage().forModule(module), module.getLogger());
         this.scorer = new Scorer(new ModelHost(settings.modelHost()), module.getLogger(), settings.queueSize(),
                 this::finish);
+        this.outcomes = new Outcomes(module, record, settings.kickMin(), settings.kickMax());
+        this.slowCheck = new SlowCheck(pending, record,
+                new Bedrock(settings.bedrockRegion(), settings.bedrockModel(), settings.bedrockToken()), outcomes,
+                scorer::decision, module.getLogger(), settings.heldCap());
     }
 
     /**
@@ -77,7 +84,7 @@ public final class ChatSafety
     public static ChatSafety start(ECCModule module, ConfigurationSection section)
     {
         List<String> errors = new ArrayList<>();
-        SafetySettings settings = SafetySettings.read(section, errors);
+        SafetySettings settings = SafetySettings.read(section, module.getDataFolder().toPath().resolve(".env"), errors);
         if (settings == null)
         {
             errors.forEach(error -> module.getLogger().error("Invalid chat safety setting: {}", error));
@@ -98,13 +105,15 @@ public final class ChatSafety
             throw new IllegalStateException("Chat safety could not open its pending state or record", ex);
         }
         safety.scorer.start();
+        safety.pending.entries().forEach(entry -> safety.slowCheck.check(entry.uuid(), entry.name()));
         module.getLogger().info("Chat safety is on; {} players are pending", safety.pending.entries().size());
         return safety;
     }
 
+    // Pending players, and players banned by a verdict until their kick.
     public boolean isShadowMuted(UUID uuid)
     {
-        return pending.contains(uuid);
+        return pending.contains(uuid) || outcomes.awaitingKick(uuid);
     }
 
     /**
@@ -125,6 +134,7 @@ public final class ChatSafety
         {
             finish(message, Verdict.unchecked(Verdict.SHADOWED));
             pending.addLater(uuid, message.toJson());
+            slowCheck.check(uuid, player.getName());
             return;
         }
         if (player.hasPermission(BYPASS_PERMISSION))
@@ -206,13 +216,17 @@ public final class ChatSafety
         }
     }
 
-    // Keeps the message in its conversation's and its author's transcript for a later pending state.
+    // Keeps the message in its conversation's and its author's transcript for a later pending state, and gives it its
+    // conversation as it stands now, so a trigger scored late still sees the lines said before it and none after.
     private void remember(Message message)
     {
         synchronized (lock)
         {
-            append(conversations.computeIfAbsent(message.conversation(), key -> new ArrayDeque<>()), message);
+            ArrayDeque<Message> conversation = conversations.computeIfAbsent(message.conversation(),
+                    key -> new ArrayDeque<>());
+            append(conversation, message);
             append(players.computeIfAbsent(message.speakerUuid(), key -> new ArrayDeque<>()), message);
+            message.context(List.copyOf(conversation));
         }
     }
 
@@ -231,17 +245,19 @@ public final class ChatSafety
         {
             return;
         }
+        List<Message> context = message.takeContext();
         JsonObject line = message.toJson();
         line.addProperty("type", "message");
         record.append(line);
         if (verdict.triggered())
         {
-            trigger(message, verdict);
+            trigger(message, verdict, context == null ? List.of(message) : context);
         }
     }
 
-    // Shadow-mutes the player on every captured channel and persists what the slow check needs.
-    private void trigger(Message message, Verdict verdict)
+    // Shadow-mutes the player on every captured channel and persists what the slow check needs: the conversation up
+    // to and including the trigger, and in `later` the player's own lines said after it.
+    private void trigger(Message message, Verdict verdict, List<Message> context)
     {
         Decision parameters = verdict.parameters();
         Verdict.Score score = verdict.score();
@@ -256,16 +272,17 @@ public final class ChatSafety
         state.addProperty("triggered_at", now.toString());
         state.add("trigger", message.toJson());
         state.add("decision", parameters.toJson());
+        state.add("conversation", transcript(context));
         synchronized (lock)
         {
-            state.add("conversation", transcript(conversations.get(message.conversation())));
             state.add("player_messages", transcript(players.get(message.speakerUuid())));
+            state.add("later", transcript(saidAfter(message)));
         }
-        state.add("later", new JsonArray());
         if (!pending.add(message.speakerUuid(), message.speaker(), now, state))
         {
             return;
         }
+        slowCheck.check(message.speakerUuid(), message.speaker());
         JsonObject line = new JsonObject();
         line.addProperty("type", "decision");
         line.addProperty("ts", now.toString());
@@ -279,7 +296,32 @@ public final class ChatSafety
         record.append(line);
     }
 
-    private static JsonArray transcript(@Nullable ArrayDeque<Message> lines)
+    // The trigger's author's lines in its conversation said after it and before the shadow mute; all of their lines
+    // when the trigger has already left the kept transcript, since every line kept then is newer. Guarded by lock.
+    private List<Message> saidAfter(Message trigger)
+    {
+        List<Message> later = new ArrayList<>();
+        ArrayDeque<Message> lines = conversations.get(trigger.conversation());
+        if (lines == null)
+        {
+            return later;
+        }
+        boolean after = !lines.contains(trigger);
+        for (Message line : lines)
+        {
+            if (line == trigger)
+            {
+                after = true;
+            }
+            else if (after && line.speakerUuid().equals(trigger.speakerUuid()))
+            {
+                later.add(line);
+            }
+        }
+        return later;
+    }
+
+    private static JsonArray transcript(@Nullable Collection<Message> lines)
     {
         JsonArray transcript = new JsonArray();
         if (lines != null)
@@ -293,9 +335,11 @@ public final class ChatSafety
     {
         Scorer.HostState host = scorer.state();
         Decision decision = scorer.decision();
+        SlowCheck.Status slow = slowCheck.status();
         return new Status(host.ready(), host.detail(), host.since(), decision == null ? null : decision.version(),
                 scorer.backlog(), pending.entries().stream().map(Pending.Entry::name)
-                .sorted(String.CASE_INSENSITIVE_ORDER).toList());
+                .sorted(String.CASE_INSENSITIVE_ORDER).toList(), slow.answering(), slow.failure(), slow.since(),
+                slow.checking(), slow.held());
     }
 
     public void close()
@@ -303,6 +347,8 @@ public final class ChatSafety
         closed = true;
         // The scorer records every message it did not score before the record and pending state close.
         scorer.close();
+        slowCheck.close();
+        outcomes.close();
         record.close();
         pending.close();
     }
@@ -334,10 +380,13 @@ public final class ChatSafety
     }
 
     /**
-     * Chat safety as {@code /ecc status} shows it. {@code hostReady} is null before the first contact with the host.
+     * Chat safety as {@code /ecc status} shows it. {@code hostReady} is null before the first contact with the host,
+     * {@code bedrockAnswering} before the first slow-check call. {@code checking} are pending players awaiting a
+     * verdict, {@code held} those whose last verdict was not sure yet.
      */
     public record Status(@Nullable Boolean hostReady, String hostDetail, Instant hostSince, @Nullable String bundle,
-                         int backlog, List<String> pending)
+                         int backlog, List<String> pending, @Nullable Boolean bedrockAnswering, String bedrockFailure,
+                         @Nullable Instant bedrockSince, List<String> checking, List<String> held)
     {
     }
 
