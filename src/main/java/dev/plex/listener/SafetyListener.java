@@ -9,6 +9,8 @@ import org.bukkit.Location;
 import org.bukkit.block.Sign;
 import org.bukkit.block.sign.Side;
 import org.bukkit.block.sign.SignSide;
+import org.bukkit.command.Command;
+import org.bukkit.command.PluginCommand;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -37,6 +39,8 @@ public class SafetyListener implements Listener
 {
     private static final Set<String> NICK_COMMANDS = Set.of("nick", "enick", "nickname", "enickname", "nickmm",
             "nickminimessage");
+    private static final Set<String> VANILLA_MESSAGE_COMMANDS = Set.of("me", "msg", "tell", "w", "teammsg", "tm",
+            "say");
     private static final int ANVIL_RESULT_SLOT = 2;
 
     private final ECCModule module;
@@ -71,6 +75,23 @@ public class SafetyListener implements Listener
             event.setCancelled(true);
         }
         safety.capture(player, ChatSafety.NICK, ChatSafety.PUBLIC_CONVERSATION, null, null, nick.strip(), shadowed);
+    }
+
+    // Minecraft's own message commands (such as /minecraft:me and /minecraft:msg) are not captured, so a shadow-muted
+    // player's use of them is cancelled.
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onVanillaMessage(PlayerCommandPreprocessEvent event)
+    {
+        if (!safety.isShadowMuted(event.getPlayer().getUniqueId()))
+        {
+            return;
+        }
+        String label = event.getMessage().split(" ", 2)[0].substring(1);
+        Command command = Bukkit.getCommandMap().getCommand(label);
+        if (command != null && !(command instanceof PluginCommand) && VANILLA_MESSAGE_COMMANDS.contains(command.getName()))
+        {
+            event.setCancelled(true);
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)

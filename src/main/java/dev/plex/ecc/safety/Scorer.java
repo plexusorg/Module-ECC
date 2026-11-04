@@ -268,7 +268,11 @@ final class Scorer
             }
             catch (ModelHost.NoScore ex)
             {
-                logger.warn("The model host gave message {} no score: {}", message.id(), ex.getMessage());
+                if (ex.stalled())
+                {
+                    down(ex.getMessage());
+                }
+                logger.warn("Message {} has no score: the model host {}", message.id(), ex.getMessage());
                 return null;
             }
             catch (ModelHost.Unavailable ex)

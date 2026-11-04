@@ -45,18 +45,54 @@ public class EssentialsSafetyListener implements Listener
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPrivateMessageSend(PrivateMessagePreSendEvent event)
     {
-        IMessageRecipient sender = event.getSender();
-        if (!(sender instanceof IUser user) || !safety.isShadowMuted(user.getBase().getUniqueId()))
+        if (!(event.getSender() instanceof IUser sender) || !safety.isShadowMuted(sender.getBase().getUniqueId()))
         {
             return;
         }
-        IMessageRecipient recipient = event.getRecipient();
         event.setCancelled(true);
-        // What EssentialsX shows the sender of a delivered message, and the reply target it sets.
-        sender.sendTl("msgFormat", AdventureUtil.parsed(sender.tlSender("meSender")), recipient.getDisplayName(),
-                event.getMessage());
+        showAsSent(essentials.getUser(sender.getBase()), event.getRecipient(), event.getMessage());
+        capturePrivate(sender.getBase(), event.getRecipient(), event.getMessage(), true);
+    }
+
+    // Shows the sender what EssentialsX would show for this message (SimpleMessageRecipient#sendMessage and
+    // #onReceiveMessage), and sets the reply target it would set, without delivering anything.
+    private void showAsSent(User sender, IMessageRecipient recipient, String message)
+    {
+        if (sender.isMuted())
+        {
+            sender.notifyMuted();
+            return;
+        }
+        if (!recipient.isReachable())
+        {
+            sender.sendTl("recentlyForeverAlone", recipient.getDisplayName());
+            return;
+        }
+        if (recipient instanceof User target)
+        {
+            if (target.isIgnoreMsg() && !sender.isAuthorized("essentials.msgtoggle.bypass"))
+            {
+                sender.sendTl("msgIgnore", recipient.getDisplayName());
+                return;
+            }
+            if (target.isIgnoredPlayer(sender))
+            {
+                return;
+            }
+            if (target.isAfk())
+            {
+                if (target.getAfkMessage() != null)
+                {
+                    sender.sendTl("userAFKWithMessage", recipient.getDisplayName(), target.getAfkMessage());
+                }
+                else
+                {
+                    sender.sendTl("userAFK", recipient.getDisplayName());
+                }
+            }
+        }
+        sender.sendTl("msgFormat", AdventureUtil.parsed(sender.tlSender("meSender")), recipient.getDisplayName(), message);
         sender.setReplyRecipient(recipient);
-        capturePrivate(user.getBase(), recipient, event.getMessage(), true);
     }
 
     // A delivered message: EssentialsX resolved the recipient (/msg by name, /r by reply target) and fires this only
@@ -108,16 +144,18 @@ public class EssentialsSafetyListener implements Listener
             return;
         }
         Player player = event.getPlayer();
+        User user = essentials.getUser(player);
+        // The text as EssentialsX shows it: & codes the player may use become colour, which is then removed.
+        String shown = FormatUtil.formatMessage(user, "essentials.chat", parts[1]);
         boolean shadowed = safety.isShadowMuted(player.getUniqueId());
         if (shadowed)
         {
             // The line EssentialsX's /me shows, sent to its author alone.
             event.setCancelled(true);
-            User user = essentials.getUser(player);
-            user.sendTl("action", user.getDisplayName(), FormatUtil.formatMessage(user, "essentials.chat", parts[1]));
+            user.sendTl("action", user.getDisplayName(), shown);
         }
         safety.capture(player, ChatSafety.ME, ChatSafety.PUBLIC_CONVERSATION, null, null,
-                FormatUtil.stripFormat(parts[1]), shadowed);
+                FormatUtil.stripFormat(shown), shadowed);
     }
 
     // EssentialsX's /me under any of its aliases (me, eme, action, describe and their prefixed forms).

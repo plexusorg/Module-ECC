@@ -20,8 +20,8 @@ import java.time.Duration;
 final class ModelHost
 {
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(2);
-    // Longer than the host's own two-minute limit on llama-server, so a slow score is not abandoned while the host
-    // still adds it to the window.
+    // Longer than one llama-server call may take on the host (two minutes). A score that still runs past it counts as
+    // having no score, since the host finishes it and adds the line to the window anyway.
     private static final Duration REQUEST_TIMEOUT = Duration.ofMinutes(3);
 
     private final URI base;
@@ -58,7 +58,7 @@ final class ModelHost
         catch (HttpTimeoutException ex)
         {
             // The host finishes a request it already started and adds the line, so a resend would add it twice.
-            throw new NoScore("the host did not answer within " + REQUEST_TIMEOUT.toMinutes() + " minutes");
+            throw new NoScore("did not answer within " + REQUEST_TIMEOUT.toMinutes() + " minutes", true);
         }
         try
         {
@@ -69,13 +69,13 @@ final class ModelHost
                     JsonObject json = parse(response, "/score");
                     return new Verdict.Score(probability(json, "p_ban"), number(json, "margin"), text(json, "version"));
                 }
-                case 422, 400 -> throw new NoScore("the host answered " + response.statusCode() + ": " + response.body());
+                case 422, 400 -> throw new NoScore("answered " + response.statusCode() + ": " + response.body(), false);
                 default -> throw new Unavailable("answered " + response.statusCode() + " to /score: " + response.body());
             }
         }
         catch (Invalid ex)
         {
-            throw new NoScore("the host's score is invalid: " + ex.getMessage());
+            throw new NoScore("returned an invalid score: " + ex.getMessage(), false);
         }
     }
 
@@ -226,13 +226,22 @@ final class ModelHost
     }
 
     /**
-     * The message may be in the host's window but has no usable score.
+     * The message may be in the host's window but has no usable score. {@code stalled} means the host took too long
+     * to answer, so it is not scoring now either.
      */
     static final class NoScore extends Exception
     {
-        NoScore(String reason)
+        private final boolean stalled;
+
+        NoScore(String reason, boolean stalled)
         {
             super(reason);
+            this.stalled = stalled;
+        }
+
+        boolean stalled()
+        {
+            return stalled;
         }
     }
 

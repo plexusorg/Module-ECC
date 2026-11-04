@@ -6,7 +6,6 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import dev.plex.api.storage.ModuleStorage;
 import org.apache.logging.log4j.Logger;
-import org.jdbi.v3.core.JdbiException;
 
 import java.sql.SQLException;
 import java.time.Instant;
@@ -171,7 +170,7 @@ final class Pending
                 }
             });
         }
-        catch (JdbiException ex)
+        catch (RuntimeException ex)
         {
             logger.error("Unable to save the chat safety pending state of {}; retrying in {} seconds", entry.uuid(),
                     RETRY_SECONDS, ex);

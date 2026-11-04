@@ -18,6 +18,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -144,9 +145,10 @@ final class RecordLog
             for (Path file : files)
             {
                 Matcher name = RECORD_FILE.matcher(file.getFileName().toString());
-                if (name.matches())
+                LocalDate date = name.matches() ? date(name.group(1)) : null;
+                if (date != null)
                 {
-                    rotate(file, LocalDate.parse(name.group(1)), name.group(2) != null, today, oldest);
+                    rotate(file, date, name.group(2) != null, today, oldest);
                 }
             }
         }
@@ -180,6 +182,20 @@ final class RecordLog
         catch (IOException ex)
         {
             logger.error("Unable to compress or delete the chat safety record {}", file, ex);
+        }
+    }
+
+    // Null for a name shaped like a record that is not a calendar date, such as 2026-02-30; that file is left alone.
+    @Nullable
+    private static LocalDate date(String text)
+    {
+        try
+        {
+            return LocalDate.parse(text);
+        }
+        catch (DateTimeParseException ex)
+        {
+            return null;
         }
     }
 
