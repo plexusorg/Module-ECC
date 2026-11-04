@@ -2,7 +2,6 @@ plugins {
     java
     checkstyle
     `maven-publish`
-    id("com.gradleup.shadow") version "9.6.1"
 }
 
 repositories {
@@ -40,7 +39,6 @@ dependencies {
     compileOnly(platform("com.intellectualsites.bom:bom-newest:1.56"))
     compileOnly("com.fastasyncworldedit:FastAsyncWorldEdit-Core")
     compileOnly("net.essentialsx:EssentialsX:2.22.1-SNAPSHOT")
-    implementation("io.airlift:aircompressor-v3:3.14")
 }
 
 group = "dev.plex"
@@ -64,23 +62,9 @@ publishing {
     }
 }
 
-// The deployable jar is the shaded one; the plain jar lacks the record's zstd compressor.
 tasks.getByName<Jar>("jar") {
     archiveBaseName.set("Module-ECC")
-    archiveClassifier.set("plain")
     archiveVersion.set("")
-}
-
-tasks.shadowJar {
-    archiveBaseName.set("Module-ECC")
-    archiveClassifier.set("")
-    archiveVersion.set("")
-    // The record uses aircompressor's pure Java zstd; its native libraries are never loaded.
-    exclude("aircompressor/**")
-}
-
-tasks.build {
-    dependsOn(tasks.shadowJar)
 }
 
 tasks {
