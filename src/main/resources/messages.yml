@@ -25,3 +25,7 @@ raidQuiet: "<light_purple>[NUSH] <gray>Raid traffic stayed low for <seconds> sec
 kickMessage: "<red>You have been disconnected from the server."
 playersKicked: "<light_purple>[NUSH] <admin> kicked <count> quarantined players."
 trustUpdateFailed: "<red>Could not save the trust change. Check the server log."
+chatSafetyOff: "<red>Chat safety is not running. The server log says why."
+chatSafetyHost: "<gray>Model host: <state> for <since> <dark_gray>(<detail>)"
+chatSafetyBundle: "<gray>Bundle: <yellow><bundle></yellow>. Waiting to be scored: <yellow><backlog></yellow>."
+chatSafetyPending: "<gray>Pending players (<yellow><count></yellow>): <players>"

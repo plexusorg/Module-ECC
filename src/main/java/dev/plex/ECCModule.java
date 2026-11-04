@@ -1,11 +1,15 @@
 package dev.plex;
 
 import dev.plex.api.config.ModuleConfiguration;
+import dev.plex.command.ECCCommand;
 import dev.plex.command.NUSHCommand;
+import dev.plex.ecc.safety.ChatSafety;
 import dev.plex.listener.ChatListener;
 import dev.plex.listener.CommandListener;
+import dev.plex.listener.EssentialsSafetyListener;
 import dev.plex.listener.JoinListener;
 import dev.plex.listener.LoginListener;
+import dev.plex.listener.SafetyListener;
 import dev.plex.module.PlexModule;
 import dev.plex.ecc.nush.FaweHook;
 import dev.plex.ecc.nush.Quarantine;
@@ -13,6 +17,7 @@ import dev.plex.ecc.nush.RaidDetector;
 import dev.plex.ecc.nush.StaffFeed;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.UUID;
@@ -22,6 +27,8 @@ import java.util.concurrent.ScheduledExecutorService;
 public class ECCModule extends PlexModule
 {
     private static final String FAWE_PLUGIN = "FastAsyncWorldEdit";
+    private static final String ESSENTIALS_PLUGIN = "Essentials";
+    private static final String CHAT_SAFETY = "chat_safety";
 
     private ModuleConfiguration config;
     private ScheduledExecutorService executor;
@@ -29,6 +36,7 @@ public class ECCModule extends PlexModule
     private StaffFeed feed;
     private RaidDetector raidDetector;
     private FaweHook faweHook;
+    private volatile @Nullable ChatSafety chatSafety;
     private volatile boolean enabled;
     private volatile int time;
     private volatile boolean shadowActive;
@@ -39,6 +47,12 @@ public class ECCModule extends PlexModule
         config = api().moduleConfigs().create(this, "config.yml");
         loadMessages("messages.yml");
         registerCommand(new NUSHCommand(this));
+        // Commands register at load; chat safety's switch decides whether /ecc exists at all.
+        config.load();
+        if (config.getBoolean(CHAT_SAFETY + ".enabled", false))
+        {
+            registerCommand(new ECCCommand(this));
+        }
     }
 
     @Override
@@ -88,11 +102,50 @@ public class ECCModule extends PlexModule
             getLogger().warn("FastAsyncWorldEdit is not enabled; WorldEdit commands of restricted players are cancelled");
         }
         raidDetector.start(executor);
+        if (config.getBoolean(CHAT_SAFETY + ".enabled", false))
+        {
+            startChatSafety();
+        }
+    }
+
+    // Chat safety failing to start leaves NUSH running.
+    private void startChatSafety()
+    {
+        ChatSafety safety;
+        try
+        {
+            safety = ChatSafety.start(this, config.getConfigurationSection(CHAT_SAFETY));
+        }
+        catch (IllegalStateException ex)
+        {
+            getLogger().error("Chat safety stays off", ex);
+            return;
+        }
+        if (safety == null)
+        {
+            return;
+        }
+        chatSafety = safety;
+        registerListener(new SafetyListener(this, safety));
+        if (Bukkit.getPluginManager().isPluginEnabled(ESSENTIALS_PLUGIN))
+        {
+            registerListener(new EssentialsSafetyListener(safety, Bukkit.getPluginManager().getPlugin(ESSENTIALS_PLUGIN)));
+        }
+        else
+        {
+            getLogger().warn("EssentialsX is not enabled; chat safety does not capture private messages, mail or /me");
+        }
     }
 
     @Override
     public void disable()
     {
+        ChatSafety safety = chatSafety;
+        chatSafety = null;
+        if (safety != null)
+        {
+            safety.close();
+        }
         if (raidDetector != null)
         {
             raidDetector.close();
@@ -147,6 +200,13 @@ public class ECCModule extends PlexModule
     public RaidDetector raidDetector()
     {
         return raidDetector;
+    }
+
+    // Null while chat safety is off.
+    @Nullable
+    public ChatSafety chatSafety()
+    {
+        return chatSafety;
     }
 
     public synchronized void toggle(boolean toggle)

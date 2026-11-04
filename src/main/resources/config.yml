@@ -24,3 +24,20 @@ feed:
 log:
   # How many log entries NUSH keeps for each restricted player - see /nush log
   size: 50
+
+chat_safety:
+  # Checks player messages for sexual talk and grooming. While false, chat safety does nothing and the settings
+  # below are not read.
+  enabled: false
+
+  # This server's name in the chat records, such as tf
+  server: ""
+
+  # The model host (ECC-Server) on this machine
+  model_host: "http://127.0.0.1:8790"
+
+  # How many of a player's messages can wait for a check; past this, their oldest waiting message is dropped
+  queue_size: 20
+
+  # How many days the daily chat records are kept
+  record_retention_days: 180

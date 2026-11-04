@@ -4,6 +4,7 @@ import dev.plex.ECCModule;
 import dev.plex.ecc.nush.Quarantine.Kind;
 import dev.plex.ecc.nush.Quarantine.LogEntry;
 import dev.plex.ecc.nush.RaidDetector.Signal;
+import dev.plex.ecc.safety.ChatSafety;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -30,7 +31,19 @@ public class ChatListener implements Listener
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
         module.raidDetector().record(Signal.CHAT, uuid);
-        if (event.isCancelled() || !module.isEnabled() || !module.quarantine().isRestricted(uuid))
+        if (event.isCancelled())
+        {
+            return;
+        }
+        boolean quarantined = module.isEnabled() && module.quarantine().isRestricted(uuid);
+        ChatSafety safety = module.chatSafety();
+        boolean shadowed = quarantined || safety != null && safety.isShadowMuted(uuid);
+        String text = PlainTextComponentSerializer.plainText().serialize(event.message());
+        if (safety != null)
+        {
+            safety.capture(player, ChatSafety.CHAT, ChatSafety.PUBLIC_CONVERSATION, null, null, text, shadowed);
+        }
+        if (!shadowed)
         {
             return;
         }
@@ -39,9 +52,10 @@ public class ChatListener implements Listener
         event.setCancelled(true);
         Component rendered = event.renderer().render(player, player.displayName(), event.message(), player);
         player.sendMessage(rendered);
-
-        String text = PlainTextComponentSerializer.plainText().serialize(event.message());
-        module.quarantine().record(uuid, new LogEntry(Kind.CHAT, Instant.now(), text));
-        module.feed().line(player, Kind.CHAT, rendered, text);
+        if (quarantined)
+        {
+            module.quarantine().record(uuid, new LogEntry(Kind.CHAT, Instant.now(), text));
+            module.feed().line(player, Kind.CHAT, rendered, text);
+        }
     }
 }
