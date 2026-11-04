@@ -30,6 +30,15 @@ chatSafetyLink: "<gray>ECC-Server: <state> for <since> <dark_gray>(<detail>)</da
 chatSafetyServer: "<gray>ECC-Server reports:"
 chatSafetyServerField: "<gray>- <field>: <yellow><value></yellow>"
 chatSafetyServerUnavailable: "<red>ECC-Server's status is unavailable: it <reason>"
+chatSafetyAlertsOff: "<gray>You no longer see chat safety alerts."
+chatSafetyAlertsOn: "<gray>You now see chat safety alerts."
+# Chat safety alerts, in the console and to staff with plex.ecc.alerts. <player> and <text> are shown as plain text
+chatSafetyMuteAlert: "<dark_aqua>[ECC] <yellow><player></yellow> <gray>muted by chat safety (<channel>): <white><text>"
+chatSafetyHeldAlert: "<dark_aqua>[ECC] <yellow><player></yellow> <gray>is still muted while chat safety keeps checking"
+chatSafetyNoticeAlert: "<dark_aqua>[ECC] <gray>Chat safety notice about <yellow><player></yellow>: <kind>"
+chatSafetyUnmuteAlert: "<dark_aqua>[ECC] <yellow><player></yellow> <gray>unmuted by chat safety: <cause>"
+chatSafetyBanAlert: "<dark_aqua>[ECC] <yellow><player></yellow> <red>banned by chat safety</red> <gray>(<role>, <cause>); kicked in <minutes> min"
+chatSafetyBanOfflineAlert: "<dark_aqua>[ECC] <yellow><player></yellow> <red>banned by chat safety</red> <gray>(<role>, <cause>); offline"
 # The reason stored in the indefinite-ban entry of an offender; Plex's indefinite-ban screen shows it with the appeal link
 chatSafetyOffenderReason: "Sexual chat, which is not allowed here."
 # The reason stored in the indefinite-ban entry of a player at risk. Their login and kick screen is the welfare screen.

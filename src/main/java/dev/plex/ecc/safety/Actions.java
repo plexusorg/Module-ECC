@@ -24,8 +24,8 @@ import java.util.concurrent.TimeUnit;
  * The action loop: one thread that long-polls ECC-Server for actions, carries each out and acknowledges it. Actions
  * are applied idempotently by id: a mute or unmute sets the mute set, and a ban's Plex entry carries the action id in
  * its label. A failed action is acknowledged as failed and applied again on a backoff, before any later action for
- * the same player; other players' actions go on meanwhile. The loop also replaces the mute set from the server at
- * start and after every outage, and saves the mute set's changes.
+ * the same player; other players' actions go on meanwhile. Each action carried out is shown to staff once. The loop
+ * also replaces the mute set from the server at start and after every outage, and saves the mute set's changes.
  */
 final class Actions
 {
@@ -42,11 +42,14 @@ final class Actions
     private final EccServer server;
     private final MuteSet muted;
     private final Bans bans;
+    private final Alerts alerts;
     private final LoggingApi logging;
     private final Logger logger;
     private final Thread loop;
     // The rest is used by the loop only. Actions received and not yet finished, by id, oldest first.
     private final Map<String, Action> unfinished = new LinkedHashMap<>();
+    // Ids of unfinished actions already carried out and shown, so applying one again does not show it again.
+    private final Set<String> shown = new HashSet<>();
     // Ids this loop is done with although the server may still hold them: actions that cannot be carried out, and
     // done actions whose acknowledgement the server refused.
     private final Set<String> settled = new HashSet<>();
@@ -55,11 +58,12 @@ final class Actions
     private long retryAt = System.nanoTime();
     private volatile int unacknowledged;
 
-    Actions(EccServer server, MuteSet muted, Bans bans, LoggingApi logging, Logger logger)
+    Actions(EccServer server, MuteSet muted, Bans bans, Alerts alerts, LoggingApi logging, Logger logger)
     {
         this.server = server;
         this.muted = muted;
         this.bans = bans;
+        this.alerts = alerts;
         this.logging = logging;
         this.logger = logger;
         this.loop = Thread.ofPlatform().daemon().name("Plex-ECC-Actions").unstarted(this::run);
@@ -227,6 +231,10 @@ final class Actions
                 detail = String.valueOf(ex);
                 ok = false;
             }
+            if (ok && shown.add(action.idText()))
+            {
+                show(action);
+            }
             if (!acknowledge(action, ok, detail))
             {
                 // Applied again once the server answers; every action is idempotent.
@@ -237,6 +245,7 @@ final class Actions
             if (ok)
             {
                 unfinished.remove(action.idText());
+                shown.remove(action.idText());
                 done++;
             }
             else
@@ -266,7 +275,21 @@ final class Actions
                 yield "unmuted";
             }
             case BAN -> bans.ban(action);
+            case NOTICE -> "shown";
         };
+    }
+
+    // An alert that cannot be shown is logged; the action it reports is still acknowledged as done.
+    private void show(Action action)
+    {
+        try
+        {
+            alerts.show(action);
+        }
+        catch (RuntimeException ex)
+        {
+            logger.error("Unable to show the chat safety alert of action {}", action.idText(), ex);
+        }
     }
 
     // False only when the server is unreachable. A refused acknowledgement is final: sending it again gets the same
@@ -405,7 +428,7 @@ final class Actions
         }
         if (invalidReason == null)
         {
-            return new Action(id, id.getAsString(), type, uuid, name, role, kickAt);
+            return new Action(id, id.getAsString(), type, uuid, name, role, kickAt, why(json));
         }
         reportInvalid(id, element, invalidReason);
         return null;
@@ -435,6 +458,13 @@ final class Actions
                     MINI_MESSAGE.escapeTags(String.valueOf(ex.getMessage())));
         }
         settled.add(id.getAsString());
+    }
+
+    // Why the action was made, for staff only: a field that is missing is shown as unknown, never refused.
+    private static Why why(JsonObject json)
+    {
+        JsonObject why = json.get("why") instanceof JsonObject object ? object : new JsonObject();
+        return new Why(string(why, "channel"), string(why, "text"), string(why, "cause"), string(why, "kind"));
     }
 
     @Nullable
@@ -478,9 +508,10 @@ final class Actions
         NOW, PACE, BACKOFF
     }
 
+    // A notice is only shown to staff.
     enum Type
     {
-        MUTE, UNMUTE, BAN;
+        MUTE, UNMUTE, BAN, NOTICE;
 
         @Nullable
         static Type of(@Nullable String value)
@@ -490,6 +521,7 @@ final class Actions
                 case "mute" -> MUTE;
                 case "unmute" -> UNMUTE;
                 case "ban" -> BAN;
+                case "notice" -> NOTICE;
                 case null, default -> null;
             };
         }
@@ -500,7 +532,15 @@ final class Actions
      * {@code kickAt} are set on bans only.
      */
     record Action(JsonElement id, String idText, Type type, UUID uuid, String name, @Nullable String role,
-                  @Nullable Instant kickAt)
+                  @Nullable Instant kickAt, Why why)
+    {
+    }
+
+    /**
+     * An action's {@code why}: a mute's {@code channel} and {@code text}, an unmute's or a ban's {@code cause}, a
+     * notice's {@code kind}.
+     */
+    record Why(@Nullable String channel, @Nullable String text, @Nullable String cause, @Nullable String kind)
     {
     }
 }

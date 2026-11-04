@@ -9,6 +9,7 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
@@ -23,8 +24,8 @@ public class ECCCommand extends SimplePlexCommand
     public ECCCommand(ECCModule module)
     {
         super(command("ecc")
-                .description("Show the state of chat safety")
-                .usage("/<command> status")
+                .description("Show the state of chat safety, or turn its alerts off and on")
+                .usage("/<command> <status | alerts>")
                 .permission("plex.ecc.status")
                 .build());
         this.module = module;
@@ -53,6 +54,20 @@ public class ECCCommand extends SimplePlexCommand
                     Placeholder.unparsed("muted", String.valueOf(status.muted()))));
             safety.serverStatus().whenComplete((server, failure) -> showServer(sender, server, failure));
             return null;
+        })));
+        command.then(Commands.literal("alerts").executes(context -> executeCommand(context, (sender, player) ->
+        {
+            if (!(sender instanceof Player staff))
+            {
+                return messageComponent("noPermissionConsole");
+            }
+            checkPermission(sender, ChatSafety.ALERTS_PERMISSION);
+            ChatSafety safety = module.chatSafety();
+            if (safety == null)
+            {
+                return messageComponent("chatSafetyOff");
+            }
+            return messageComponent(safety.toggleAlerts(staff) ? "chatSafetyAlertsOff" : "chatSafetyAlertsOn");
         })));
     }
 

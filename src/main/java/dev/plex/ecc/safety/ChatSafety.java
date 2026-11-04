@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 public final class ChatSafety
 {
     public static final String BYPASS_PERMISSION = "plex.ecc.chat.bypass";
+    public static final String ALERTS_PERMISSION = "plex.ecc.alerts";
     public static final String CHAT = "chat";
     public static final String ME = "me";
     public static final String NICK = "nick";
@@ -39,6 +40,7 @@ public final class ChatSafety
     private final MuteSet muted;
     private final Outbox outbox;
     private final Bans bans;
+    private final Alerts alerts;
     private final Actions actions;
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
 
@@ -51,7 +53,8 @@ public final class ChatSafety
         this.muted = new MuteSet(module.api().storage().forModule(module));
         this.outbox = new Outbox(server, module.api().logging());
         this.bans = new Bans(module, muted);
-        this.actions = new Actions(server, muted, bans, module.api().logging(), module.getLogger());
+        this.alerts = new Alerts(module);
+        this.actions = new Actions(server, muted, bans, alerts, module.api().logging(), module.getLogger());
     }
 
     /**
@@ -82,6 +85,7 @@ public final class ChatSafety
             throw new IllegalStateException("Chat safety could not read its saved mute set", ex);
         }
         safety.outbox.start();
+        safety.alerts.start();
         safety.actions.start();
         module.api().logging().info("Chat safety is on with ECC-Server at {0}; {1} players are muted",
                 MINI_MESSAGE.escapeTags(String.valueOf(settings.eccServer())),
@@ -92,6 +96,13 @@ public final class ChatSafety
     public boolean isShadowMuted(UUID uuid)
     {
         return muted.contains(uuid);
+    }
+
+    // Turns a staff member's alerts off or back on until they leave; true when they are now off. Call it on the
+    // player's own thread once they hold ALERTS_PERMISSION.
+    public boolean toggleAlerts(Player player)
+    {
+        return alerts.toggle(player);
     }
 
     /**
