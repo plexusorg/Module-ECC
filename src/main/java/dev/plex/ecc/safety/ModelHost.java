@@ -80,7 +80,7 @@ final class ModelHost
     }
 
     /**
-     * Reads the served bundle's version and decision parameters.
+     * Reads the served bundle's version, decision parameters and slow-check system prompt.
      *
      * @throws Unavailable the host is down or not ready, or serves parameters this module cannot apply
      */
@@ -98,13 +98,18 @@ final class ModelHost
             {
                 throw new Invalid("/bundle has no decision object");
             }
+            if (!(json.get("slow_check") instanceof JsonObject slowCheck))
+            {
+                throw new Invalid("/bundle has no slow_check object");
+            }
             String rule = text(parameters, "window_rule");
             if (!Decision.SINGLE.equals(rule))
             {
                 throw new Unavailable("serves window rule '" + rule + "', which this module does not apply");
             }
             return new Decision(text(json, "version"), rule, probability(parameters, "trigger"),
-                    probability(parameters, "clearing"), probability(parameters, "corroboration"));
+                    probability(parameters, "clearing"), probability(parameters, "corroboration"),
+                    text(slowCheck, "system"));
         }
         catch (Invalid ex)
         {

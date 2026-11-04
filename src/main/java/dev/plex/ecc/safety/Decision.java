@@ -3,10 +3,12 @@ package dev.plex.ecc.safety;
 import com.google.gson.JsonObject;
 
 /**
- * The deployed bundle's decision parameters, read from the model host and kept in memory only.
- * {@link ModelHost} accepts only the {@code single} window rule: one message at or above the trigger threshold.
+ * The deployed bundle's decision parameters and slow-check system prompt, read from the model host and kept in memory
+ * only. {@link ModelHost} accepts only the {@code single} window rule: one message at or above the trigger threshold.
+ * The prompt embeds the private policy, so it is never written to the record or the pending state.
  */
-record Decision(String version, String windowRule, double trigger, double clearing, double corroboration)
+record Decision(String version, String windowRule, double trigger, double clearing, double corroboration,
+                String slowCheckSystem)
 {
     static final String SINGLE = "single";
 
@@ -15,6 +17,7 @@ record Decision(String version, String windowRule, double trigger, double cleari
         return score.pBan() >= trigger;
     }
 
+    // Everything but the prompt.
     JsonObject toJson()
     {
         JsonObject json = new JsonObject();
