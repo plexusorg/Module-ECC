@@ -177,14 +177,21 @@ final class Outbox
             }
             catch (EccServer.Unavailable ex)
             {
+                // Waits on the lock, so close() ends the backoff at once; new messages do not.
+                long until = System.currentTimeMillis() + retry;
                 synchronized (lock)
                 {
+                    long left = retry;
+                    while (!closing && left > 0)
+                    {
+                        lock.wait(left);
+                        left = until - System.currentTimeMillis();
+                    }
                     if (closing)
                     {
                         return false;
                     }
                 }
-                Thread.sleep(retry);
                 retry = Math.min(retry * 2, LAST_RETRY_MILLIS);
             }
         }
@@ -200,8 +207,8 @@ final class Outbox
         }
         if (count > 0)
         {
-            logger.warn("Chat safety dropped {} chat messages while ECC-Server was unreachable, each the oldest of a"
-                    + " player who had {} waiting", count, PLAYER_LIMIT);
+            logger.warn("Chat safety dropped {} chat messages before ECC-Server took them, each the oldest of a player"
+                    + " who had {} waiting", count, PLAYER_LIMIT);
         }
     }
 

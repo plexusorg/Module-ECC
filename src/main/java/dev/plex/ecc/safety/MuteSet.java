@@ -97,7 +97,7 @@ final class MuteSet
     }
 
     /**
-     * Writes every changed player's row. Called on the action loop's thread only.
+     * Writes every changed player's row. Called by the action loop, and once at stop after the loop has ended.
      *
      * @throws RuntimeException when the database fails; the rows not yet written stay changed for the next flush
      */

@@ -3,6 +3,7 @@ package dev.plex.ecc.safety;
 import dev.plex.ECCModule;
 import dev.plex.api.player.PlexPlayerView;
 import dev.plex.api.punishment.IndefiniteBanRequest;
+import dev.plex.api.punishment.IndefiniteBanView;
 import dev.plex.api.punishment.PunishmentsApi;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import net.kyori.adventure.text.Component;
@@ -98,7 +99,20 @@ final class Bans
                 throw new Failed("unable to write entry " + label + ": " + ex);
             }
         }
+        requireCovers(bans, label, uuid, action.name());
         return written + "; " + kick(uuid, player, atRisk ? welfareKick : offenderKick, action.kickAt());
+    }
+
+    // An existing entry with the label must be this player's, so a reused action id never passes as their ban.
+    private void requireCovers(PunishmentsApi bans, String label, UUID uuid, String name) throws Failed
+    {
+        Optional<IndefiniteBanView> entry = bans.indefiniteBanByLabel(label);
+        if (entry.isEmpty() || !entry.get().uuids().contains(uuid))
+        {
+            logger.error("The indefinite-ban entry {} does not cover {} ({}), whom ECC-Server banned under that id",
+                    label, name, uuid);
+            throw new Failed("entry " + label + " does not cover " + uuid);
+        }
     }
 
     // The online player's address, else the last IP Plex recorded for them, else none.
@@ -168,6 +182,7 @@ final class Bans
             {
                 module.kickPlayerOnShutdown(player, screen);
             }
+            muted.remove(uuid);
         });
         awaitingKick.clear();
     }

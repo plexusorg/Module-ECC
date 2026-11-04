@@ -2,6 +2,7 @@ package dev.plex.ecc.safety;
 
 import com.google.gson.JsonObject;
 import dev.plex.ECCModule;
+import org.apache.logging.log4j.Logger;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
@@ -38,9 +39,11 @@ public final class ChatSafety
     private final Outbox outbox;
     private final Bans bans;
     private final Actions actions;
+    private final Logger logger;
 
     private ChatSafety(ECCModule module, SafetySettings settings)
     {
+        this.logger = module.getLogger();
         this.server = new EccServer(settings.eccServer(), module.getLogger());
         this.muted = new MuteSet(module.api().storage().forModule(module));
         this.outbox = new Outbox(server, module.getLogger());
@@ -131,6 +134,16 @@ public final class ChatSafety
     {
         actions.close();
         bans.close();
+        try
+        {
+            // The players kicked above leave the saved set; the action loop has stopped, so this thread writes it.
+            muted.flush();
+        }
+        catch (RuntimeException ex)
+        {
+            logger.error("Unable to save chat safety's mute set; ECC-Server's mute set replaces it at the next start",
+                    ex);
+        }
         outbox.close();
         server.close();
     }

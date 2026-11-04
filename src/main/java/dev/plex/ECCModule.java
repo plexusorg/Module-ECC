@@ -142,12 +142,13 @@ public class ECCModule extends PlexModule
     @Override
     public void disable()
     {
+        // Closed before it is cleared, so a muted player's chat stays shadowed until the listeners are gone.
         ChatSafety safety = chatSafety;
-        chatSafety = null;
         if (safety != null)
         {
             safety.close();
         }
+        chatSafety = null;
         if (raidDetector != null)
         {
             raidDetector.close();
