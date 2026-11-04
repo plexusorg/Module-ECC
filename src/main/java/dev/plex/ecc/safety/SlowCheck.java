@@ -111,7 +111,7 @@ final class SlowCheck
         }
         catch (RejectedExecutionException ex)
         {
-            // Closed; the pending state stays and the check resumes at the next start.
+            logger.debug("Chat safety is closing; the slow check of {} resumes at the next start", pendingCase.name);
         }
     }
 
@@ -141,12 +141,18 @@ final class SlowCheck
             switch (result)
             {
                 case DONE -> cases.remove(pendingCase.uuid);
-                case WAIT -> submit(pendingCase, PROMPT_WAIT);
+                case WAIT ->
+                {
+                    pendingCase.runMillis = 0;
+                    submit(pendingCase, PROMPT_WAIT);
+                }
                 case RETRY ->
                 {
                     // The retry reads the latest lines, so a rerun asked for meanwhile is part of it.
                     pendingCase.failing = true;
                     pendingCase.rerun = false;
+                    // A failed run was not real verdict time.
+                    pendingCase.runMillis = 0;
                     Duration wait = pendingCase.retry;
                     pendingCase.retry = wait.multipliedBy(2).compareTo(LAST_RETRY) > 0 ? LAST_RETRY : wait.multipliedBy(2);
                     submit(pendingCase, wait);
@@ -161,10 +167,18 @@ final class SlowCheck
     {
         pendingCase.failing = false;
         pendingCase.retry = FIRST_RETRY;
+        pendingCase.heldMillis += pendingCase.runMillis;
+        pendingCase.runMillis = 0;
         if (!pendingCase.held)
         {
             pendingCase.held = true;
             pendingCase.lastTick = System.currentTimeMillis();
+        }
+        // The cap ends the pending state even while the player keeps sending lines.
+        if (pendingCase.heldMillis >= capMillis)
+        {
+            lift(pendingCase);
+            return;
         }
         if (pendingCase.rerun)
         {
@@ -173,13 +187,11 @@ final class SlowCheck
             return;
         }
         pendingCase.running = false;
-        if (pendingCase.heldMillis >= capMillis)
-        {
-            lift(pendingCase);
-        }
     }
 
     // Ends a held player's pending state after the cap: real verdict time, not counting time while Bedrock failed.
+    // Time while a re-check runs counts only once it ends with a verdict, since a call is known to fail only when it
+    // ends.
     private void tick()
     {
         synchronized (lock)
@@ -189,7 +201,14 @@ final class SlowCheck
             {
                 if (pendingCase.held && !pendingCase.failing && failingSince == null)
                 {
-                    pendingCase.heldMillis += now - pendingCase.lastTick;
+                    if (pendingCase.running)
+                    {
+                        pendingCase.runMillis += now - pendingCase.lastTick;
+                    }
+                    else
+                    {
+                        pendingCase.heldMillis += now - pendingCase.lastTick;
+                    }
                 }
                 pendingCase.lastTick = now;
                 if (pendingCase.held && !pendingCase.running && pendingCase.heldMillis >= capMillis)
@@ -343,7 +362,8 @@ final class SlowCheck
             {
                 self = entry.getKey();
             }
-            else if (bans(entry.getValue()))
+            // A participant who triggered while this check ran is decided by their own check instead.
+            else if (bans(entry.getValue()) && !pending.contains(uuid))
             {
                 banned &= outcomes.ban(uuid, entry.getKey(), entry.getValue().role(), entry.getValue().cause());
             }
@@ -404,9 +424,9 @@ final class SlowCheck
             if (call.rejectedKey() && !keyRejected)
             {
                 keyRejected = true;
-                logger.error("Bedrock rejected the API key: AWS_BEARER_TOKEN_BEDROCK in chat safety's .env is expired"
-                        + " or invalid ({}). Slow checks retry until a valid key is set and the module is reloaded",
-                        failure);
+                logger.error("Bedrock refused the request: AWS_BEARER_TOKEN_BEDROCK in chat safety's .env is expired"
+                        + " or invalid, or its account has no access to the model ({}). Slow checks retry until a valid"
+                        + " key is set and the module is reloaded", failure);
             }
             if (failingSince == null)
             {
@@ -552,6 +572,8 @@ final class SlowCheck
         private boolean failing;
         private boolean loaded;
         private long heldMillis;
+        // Held time while the current re-check runs; added to heldMillis when it ends with a verdict.
+        private long runMillis;
         private long lastTick;
         private Duration retry = FIRST_RETRY;
 

@@ -96,18 +96,24 @@ final class Outcomes
             String label = "ecc-" + uuid + "-" + Instant.now().toEpochMilli();
             IndefiniteBanRequest request = new IndefiniteBanRequest(label, atRisk ? atRiskReason : offenderReason,
                     atRisk ? welfareScreen : "", List.of(name), List.of(uuid), ip(uuid, player));
+            boolean created;
             try
             {
-                if (!bans.createIndefiniteBan(request).get(WRITE_SECONDS, TimeUnit.SECONDS))
-                {
-                    throw new ExecutionException("an indefinite ban labeled " + label + " already exists", null);
-                }
+                created = bans.createIndefiniteBan(request).get(WRITE_SECONDS, TimeUnit.SECONDS);
             }
             catch (ExecutionException | TimeoutException | IllegalArgumentException ex)
             {
                 logger.error("Unable to write the chat safety ban of {} ({}); the verdict is applied again", name, uuid,
                         ex);
                 action(uuid, name, "ban_failed", role, cause, String.valueOf(ex));
+                return false;
+            }
+            if (!created)
+            {
+                // The label holds the time in milliseconds, so the next attempt uses a new one.
+                logger.error("An indefinite ban labeled {} already exists; the chat safety ban of {} is applied again",
+                        label, name);
+                action(uuid, name, "ban_failed", role, cause, "label exists: " + label);
                 return false;
             }
             action(uuid, name, "banned", role, cause, label);
