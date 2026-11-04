@@ -29,8 +29,6 @@ import java.util.concurrent.TimeUnit;
  */
 final class Actions
 {
-    private static final long FIRST_RETRY_MILLIS = 1000;
-    private static final long LAST_RETRY_MILLIS = TimeUnit.SECONDS.toMillis(30);
     // The gap between polls while the server still holds an action this loop has not finished, since a poll returns
     // at once then; and after a poll that came back empty at once.
     private static final long PACE_MILLIS = 2000;
@@ -54,7 +52,7 @@ final class Actions
     // done actions whose acknowledgement the server refused.
     private final Set<String> settled = new HashSet<>();
     // One retry clock for everything that failed: unfinished actions, the mute set's refresh and its saving.
-    private long retryMillis = FIRST_RETRY_MILLIS;
+    private long retryMillis = EccServer.FIRST_RETRY_MILLIS;
     private long retryAt = System.nanoTime();
     private volatile int unacknowledged;
 
@@ -95,7 +93,7 @@ final class Actions
 
     private void run()
     {
-        long backoff = FIRST_RETRY_MILLIS;
+        long backoff = EccServer.FIRST_RETRY_MILLIS;
         try
         {
             while (!Thread.currentThread().isInterrupted())
@@ -104,10 +102,10 @@ final class Actions
                 if (next == Next.BACKOFF)
                 {
                     Thread.sleep(backoff);
-                    backoff = Math.min(backoff * 2, LAST_RETRY_MILLIS);
+                    backoff = Math.min(backoff * 2, EccServer.LAST_RETRY_MILLIS);
                     continue;
                 }
-                backoff = FIRST_RETRY_MILLIS;
+                backoff = EccServer.FIRST_RETRY_MILLIS;
                 if (next == Next.PACE)
                 {
                     Thread.sleep(PACE_MILLIS);
@@ -192,11 +190,11 @@ final class Actions
     {
         if (!failed)
         {
-            retryMillis = FIRST_RETRY_MILLIS;
+            retryMillis = EccServer.FIRST_RETRY_MILLIS;
             return;
         }
         retryAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retryMillis);
-        retryMillis = Math.min(retryMillis * 2, LAST_RETRY_MILLIS);
+        retryMillis = Math.min(retryMillis * 2, EccServer.LAST_RETRY_MILLIS);
     }
 
     // Applies the actions in order, skipping a blocked player's. PACE when any stays unfinished; BACKOFF when an
@@ -413,10 +411,11 @@ final class Actions
         UUID uuid = uuid(json);
         String name = string(json, "name");
         String role = string(json, "role");
+        Why why = why(json, type);
         Instant kickAt = null;
-        if (type == null || uuid == null || name == null)
+        if (type == null || uuid == null || name == null || why == null)
         {
-            invalidReason = "type, uuid or name is missing or invalid";
+            invalidReason = "type, uuid, name or why is missing or invalid";
         }
         else if (type == Type.BAN)
         {
@@ -428,7 +427,7 @@ final class Actions
         }
         if (invalidReason == null)
         {
-            return new Action(id, id.getAsString(), type, uuid, name, role, kickAt, why(json));
+            return new Action(id, id.getAsString(), type, uuid, name, role, kickAt, why);
         }
         reportInvalid(id, element, invalidReason);
         return null;
@@ -460,11 +459,25 @@ final class Actions
         settled.add(id.getAsString());
     }
 
-    // Why the action was made, for staff only: a field that is missing is shown as unknown, never refused.
-    private static Why why(JsonObject json)
+    // Why the action was made, for staff only. Null unless the action carries the fields its type has.
+    @Nullable
+    private static Why why(JsonObject json, @Nullable Type type)
     {
-        JsonObject why = json.get("why") instanceof JsonObject object ? object : new JsonObject();
-        return new Why(string(why, "channel"), string(why, "text"), string(why, "cause"), string(why, "kind"));
+        if (type == null || !(json.get("why") instanceof JsonObject why))
+        {
+            return null;
+        }
+        String channel = string(why, "channel");
+        String text = string(why, "text");
+        String cause = string(why, "cause");
+        String kind = string(why, "kind");
+        boolean complete = switch (type)
+        {
+            case MUTE -> channel != null && text != null;
+            case UNMUTE, BAN -> cause != null;
+            case NOTICE -> kind != null;
+        };
+        return complete ? new Why(channel, text, cause, kind) : null;
     }
 
     @Nullable

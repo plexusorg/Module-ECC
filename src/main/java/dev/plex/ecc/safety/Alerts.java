@@ -13,11 +13,9 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
-import org.jetbrains.annotations.Nullable;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -133,7 +131,7 @@ final class Alerts implements Listener
             case BAN -> ban(action, player);
             case NOTICE -> HELD.equals(why.kind()) ? module.messageComponent("chatSafetyHeldAlert", player)
                     : module.messageComponent("chatSafetyNoticeAlert", player,
-                    Placeholder.unparsed("kind", Objects.requireNonNullElse(why.kind(), "unknown")));
+                    Placeholder.unparsed("kind", why.kind()));
         };
     }
 
@@ -151,7 +149,7 @@ final class Alerts implements Listener
                 Placeholder.unparsed("minutes", String.valueOf(minutes)));
     }
 
-    private static String channel(@Nullable String channel)
+    private static String channel(String channel)
     {
         return switch (channel)
         {
@@ -163,7 +161,6 @@ final class Alerts implements Listener
             case ChatSafety.SIGN -> "sign";
             case ChatSafety.BOOK -> "book";
             case ChatSafety.ANVIL -> "item name";
-            case null -> "unknown channel";
             // A module chat channel, named by its key's namespace, such as guilds:chat.
             default ->
             {
@@ -173,37 +170,31 @@ final class Alerts implements Listener
         };
     }
 
-    private static String unmuteCause(@Nullable String cause)
+    private static String unmuteCause(String cause)
     {
         return switch (cause)
         {
             case "not_involved" -> "not involved";
             case "held_past_cap" -> "still not sure when the time limit ran out";
             case "kicked" -> "the ban's kick time came";
-            case null -> "no cause given";
             default -> cause;
         };
     }
 
-    private static String banCause(@Nullable String cause)
+    private static String banCause(String cause)
     {
         return switch (cause)
         {
             case "kimi" -> "review verdict";
             case "corroborated" -> "corroborated by their own messages";
-            case null -> "no cause given";
             default -> cause;
         };
     }
 
     // One line, cut at a whole character: a book's pages can be long and hold line breaks. The record on ECC-Server
     // keeps the whole text.
-    private static String shortened(@Nullable String text)
+    private static String shortened(String text)
     {
-        if (text == null)
-        {
-            return "";
-        }
         String line = text.replaceAll("\\R+", " ");
         if (line.codePointCount(0, line.length()) <= TEXT_LIMIT)
         {
