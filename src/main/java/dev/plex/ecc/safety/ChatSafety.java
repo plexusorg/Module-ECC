@@ -129,10 +129,12 @@ public final class ChatSafety
         return server.status();
     }
 
-    // Stops the action loop first, so no ban starts while the waiting kicks are carried out.
+    // Stops the action loop first, so no ban starts while the waiting kicks are carried out, and kicks after the
+    // sender has stopped, so a banned player stays muted while it drains.
     public void close()
     {
         actions.close();
+        outbox.close();
         bans.close();
         try
         {
@@ -144,7 +146,6 @@ public final class ChatSafety
             logger.error("Unable to save chat safety's mute set; ECC-Server's mute set replaces it at the next start",
                     ex);
         }
-        outbox.close();
         server.close();
     }
 

@@ -178,14 +178,14 @@ final class Outbox
             catch (EccServer.Unavailable ex)
             {
                 // Waits on the lock, so close() ends the backoff at once; new messages do not.
-                long until = System.currentTimeMillis() + retry;
+                long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retry);
                 synchronized (lock)
                 {
                     long left = retry;
                     while (!closing && left > 0)
                     {
                         lock.wait(left);
-                        left = until - System.currentTimeMillis();
+                        left = TimeUnit.NANOSECONDS.toMillis(until - System.nanoTime());
                     }
                     if (closing)
                     {

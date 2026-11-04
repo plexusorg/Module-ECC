@@ -42,11 +42,12 @@ final class Actions
     private final Thread loop;
     // The rest is used by the loop only. Actions received and not yet finished, by id, oldest first.
     private final Map<String, Action> unfinished = new LinkedHashMap<>();
-    // Ids of actions that cannot be carried out, reported once each.
-    private final Set<String> invalid = new HashSet<>();
+    // Ids this loop is done with although the server may still hold them: actions that cannot be carried out, and
+    // done actions whose acknowledgement the server refused.
+    private final Set<String> settled = new HashSet<>();
     // One retry clock for everything that failed: unfinished actions, the mute set's refresh and its saving.
     private long retryMillis = FIRST_RETRY_MILLIS;
-    private long retryAt;
+    private long retryAt = System.nanoTime();
     private volatile int unacknowledged;
 
     Actions(EccServer server, MuteSet muted, Bans bans, Logger logger)
@@ -120,7 +121,7 @@ final class Actions
     // One poll and the actions it returned.
     private Next cycle() throws InterruptedException
     {
-        boolean due = System.currentTimeMillis() >= retryAt;
+        boolean due = System.nanoTime() - retryAt >= 0;
         boolean failed = false;
         long started = System.nanoTime();
         JsonArray polled;
@@ -128,7 +129,7 @@ final class Actions
         {
             if (due)
             {
-                failed = !refreshMuted() | !save();
+                failed = !refreshMuted();
             }
             polled = server.actions();
         }
@@ -157,7 +158,7 @@ final class Actions
             }
         }
         List<Action> received = parse(polled);
-        // The server still holds an action that cannot be carried out.
+        // The server still holds an action this loop is done with.
         boolean held = received.size() < polled.size();
         for (Action action : received)
         {
@@ -169,9 +170,10 @@ final class Actions
         Next next = apply(new ArrayList<>(batch.values()), blocked, due ? 0 : unfinished.size());
         if (due)
         {
+            failed |= !save();
             retried(failed || next == Next.PACE);
         }
-        // NOW means nothing is unfinished; the server may still hold an invalid action, or answer at once.
+        // NOW means nothing is unfinished; the server may still hold a settled action, or answer at once.
         return next == Next.NOW && (held || fast && polled.isEmpty()) ? Next.PACE : next;
     }
 
@@ -183,7 +185,7 @@ final class Actions
             retryMillis = FIRST_RETRY_MILLIS;
             return;
         }
-        retryAt = System.currentTimeMillis() + retryMillis;
+        retryAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retryMillis);
         retryMillis = Math.min(retryMillis * 2, LAST_RETRY_MILLIS);
     }
 
@@ -242,7 +244,7 @@ final class Actions
         return failed || !unfinished.isEmpty() ? Next.PACE : Next.NOW;
     }
 
-    // A mute or unmute takes effect in memory at once; the mute set is saved at the start of the next cycle.
+    // A mute or unmute takes effect in memory at once; the mute set is saved once the cycle's actions are applied.
     private String carryOut(Action action) throws Bans.Failed, InterruptedException
     {
         return switch (action.type())
@@ -276,6 +278,10 @@ final class Actions
         catch (EccServer.Rejected ex)
         {
             logger.error("ECC-Server refused the acknowledgement of action {}: it {}", action.idText(), ex.getMessage());
+            if (ok)
+            {
+                settled.add(action.idText());
+            }
         }
         return true;
     }
@@ -341,14 +347,14 @@ final class Actions
         return current;
     }
 
-    // The polled actions that can be carried out, in the server's order.
+    // The polled actions to carry out, in the server's order.
     private List<Action> parse(JsonArray polled) throws InterruptedException
     {
         List<Action> received = new ArrayList<>();
         for (JsonElement element : polled)
         {
             Action action = parse(element);
-            if (action != null)
+            if (action != null && !settled.contains(action.idText()))
             {
                 received.add(action);
             }
@@ -365,7 +371,7 @@ final class Actions
         JsonElement id = json.get("id");
         if (id == null || !id.isJsonPrimitive() || id.getAsString().isEmpty())
         {
-            if (invalid.add(String.valueOf(element)))
+            if (settled.add(String.valueOf(element)))
             {
                 logger.error("ECC-Server sent an action without an id, which cannot be carried out: {}", element);
             }
@@ -397,10 +403,10 @@ final class Actions
         return null;
     }
 
-    // Logs an action that cannot be carried out and acknowledges it as failed, once per id.
+    // Logs an action that cannot be carried out and acknowledges it as failed, until the acknowledgement is delivered.
     private void reportInvalid(JsonElement id, JsonElement element, String reason) throws InterruptedException
     {
-        if (!invalid.add(id.getAsString()))
+        if (settled.contains(id.getAsString()))
         {
             return;
         }
@@ -409,10 +415,16 @@ final class Actions
         {
             server.ack(id, false, "invalid action: " + reason);
         }
-        catch (EccServer.Unavailable | EccServer.Rejected ex)
+        catch (EccServer.Unavailable ex)
         {
-            logger.error("Unable to acknowledge invalid action {} as failed: ECC-Server {}", id, ex.getMessage());
+            // Acknowledged at the next poll that returns it.
+            return;
         }
+        catch (EccServer.Rejected ex)
+        {
+            logger.error("ECC-Server refused the acknowledgement of invalid action {}: it {}", id, ex.getMessage());
+        }
+        settled.add(id.getAsString());
     }
 
     @Nullable
