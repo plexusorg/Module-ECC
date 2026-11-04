@@ -44,7 +44,7 @@ public final class ChatSafety
     private ChatSafety(ECCModule module, SafetySettings settings)
     {
         this.logger = module.getLogger();
-        this.server = new EccServer(settings.eccServer(), module.getLogger());
+        this.server = new EccServer(settings.eccServer(), settings.token(), module.getLogger());
         this.muted = new MuteSet(module.api().storage().forModule(module));
         this.outbox = new Outbox(server, module.getLogger());
         this.bans = new Bans(module, muted);

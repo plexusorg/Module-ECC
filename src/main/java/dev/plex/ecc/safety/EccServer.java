@@ -19,7 +19,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
 /**
- * ECC-Server's loopback HTTP interface, and whether it answers. The sender and the action loop share this link; the
+ * ECC-Server's HTTP interface, and whether it answers. The sender and the action loop share this link; the
  * first failure after a working connection logs one warning, and the first answer after it logs one more and asks the
  * action loop to replace the mute set from the server.
  */
@@ -32,6 +32,7 @@ final class EccServer
     private static final int BODY_LIMIT = 300;
 
     private final URI base;
+    private final String authorization;
     private final Logger logger;
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(CONNECT_TIMEOUT)
@@ -43,9 +44,10 @@ final class EccServer
     // Guarded by lock. The mute set must be replaced from GET /muted: at start, and after every outage.
     private boolean refreshMuted = true;
 
-    EccServer(URI base, Logger logger)
+    EccServer(URI base, String token, Logger logger)
     {
         this.base = base;
+        this.authorization = "Bearer " + token;
         this.logger = logger;
     }
 
@@ -81,7 +83,8 @@ final class EccServer
     // GET /status, answered on the HTTP client's thread; it fails with Unavailable or Rejected.
     CompletableFuture<JsonObject> status()
     {
-        HttpRequest request = HttpRequest.newBuilder(uri("/status")).timeout(REQUEST_TIMEOUT).GET().build();
+        HttpRequest request = HttpRequest.newBuilder(uri("/status")).timeout(REQUEST_TIMEOUT)
+                .header("Authorization", authorization).GET().build();
         return client.sendAsync(request, HttpResponse.BodyHandlers.ofString())
                 .exceptionally(ex ->
                 {
@@ -156,12 +159,13 @@ final class EccServer
         HttpResponse<String> response;
         try
         {
-            response = client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+            response = client.send(request.header("Authorization", authorization).build(),
+                    HttpResponse.BodyHandlers.ofString());
         }
         catch (IOException ex)
         {
             Unavailable unavailable = new Unavailable("is unreachable: " + ex);
-            down(unavailable.getMessage());
+            down(unavailable.getMessage(), false);
             throw unavailable;
         }
         try
@@ -170,7 +174,7 @@ final class EccServer
         }
         catch (Unavailable ex)
         {
-            down(ex.getMessage());
+            down(ex.getMessage(), ex.unauthorized);
             throw ex;
         }
         up();
@@ -181,6 +185,10 @@ final class EccServer
     private static void check(HttpResponse<String> response) throws Unavailable, Rejected
     {
         int status = response.statusCode();
+        if (status == 401)
+        {
+            throw new Unavailable("answered 401: it did not accept chat_safety.token", true);
+        }
         if (status >= 500)
         {
             throw new Unavailable("answered " + status + " to " + response.request().uri().getPath() + ": "
@@ -213,16 +221,31 @@ final class EccServer
         }
     }
 
-    private void down(String reason)
+    // Logs once per outage; a rejected token is logged again if it follows another failure in the same outage.
+    private void down(String reason, boolean unauthorized)
     {
         synchronized (lock)
         {
             if (Boolean.FALSE.equals(state.reachable()))
             {
+                boolean log = unauthorized && !reason.equals(state.detail());
                 state = new State(false, reason, state.since());
-                return;
+                if (!log)
+                {
+                    return;
+                }
             }
-            state = new State(false, reason, Instant.now());
+            else
+            {
+                state = new State(false, reason, Instant.now());
+            }
+        }
+        if (unauthorized)
+        {
+            logger.error("ECC-Server at {} {}; set chat_safety.token to the output of 'sudo ecc-server token'."
+                    + " Chat safety buffers messages, and its saved mute set decides who is muted until the server"
+                    + " accepts the token", base, reason);
+            return;
         }
         logger.warn("ECC-Server at {} {}; chat safety buffers messages, and its saved mute set decides who is muted"
                 + " until the server answers", base, reason);
@@ -267,9 +290,18 @@ final class EccServer
      */
     static final class Unavailable extends Exception
     {
+        // The server answered 401: it did not accept the token.
+        private final boolean unauthorized;
+
         Unavailable(String reason)
         {
+            this(reason, false);
+        }
+
+        Unavailable(String reason, boolean unauthorized)
+        {
             super(reason);
+            this.unauthorized = unauthorized;
         }
     }
 

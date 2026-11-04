@@ -31,5 +31,9 @@ chat_safety:
   # not read.
   enabled: false
 
-  # ECC-Server on this machine
+  # ECC-Server's address as the game server reaches it, for example "http://172.17.0.1:8790" from a container on the
+  # default Docker bridge. Must match ECC-Server's `listen`.
   model_host: "http://127.0.0.1:8790"
+
+  # ECC-Server's token: the output of `sudo ecc-server token`. Required; chat safety stays off while it is empty.
+  token: ""
