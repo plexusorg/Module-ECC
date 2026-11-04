@@ -107,14 +107,6 @@ public class RaidDetector
         }
     }
 
-    public boolean raidActive()
-    {
-        synchronized (module)
-        {
-            return raidActive;
-        }
-    }
-
     public void close()
     {
         synchronized (module)

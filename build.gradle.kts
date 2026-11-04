@@ -14,10 +14,6 @@ repositories {
     }
 
     maven {
-        url = uri("https://jitpack.io")
-    }
-
-    maven {
         url = uri("https://maven.enginehub.org/repo/")
     }
 
@@ -29,13 +25,8 @@ repositories {
 }
 
 dependencies {
-    compileOnly("org.projectlombok:lombok:1.18.48")
-    annotationProcessor("org.projectlombok:lombok:1.18.48")
     compileOnly("io.papermc.paper:paper-api:26.2.build.+")
     compileOnly("dev.plex:api:2.0.1-SNAPSHOT")
-    compileOnly("com.github.MilkBowl:VaultAPI:1.7.1") {
-        exclude("org.bukkit", "bukkit")
-    }
     compileOnly(platform("com.intellectualsites.bom:bom-newest:1.56"))
     compileOnly("com.fastasyncworldedit:FastAsyncWorldEdit-Core")
     compileOnly("net.essentialsx:EssentialsX:2.22.1-SNAPSHOT")

@@ -191,7 +191,7 @@ public class Quarantine
         }
     }
 
-    public synchronized void resume(UUID uuid)
+    private synchronized void resume(UUID uuid)
     {
         Restriction restriction = restrictions.get(uuid);
         if (restriction == null || restriction.expiry != null)

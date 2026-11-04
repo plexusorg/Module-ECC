@@ -1,8 +1,7 @@
 # Automatic raid detection
 
 NUSH monitors joins, chat messages, and player commands while quarantine is on or off.
-There are no raid settings to tune. The old `raid` configuration section is no longer read.
-Keep the existing settings for quarantine duration, recent joins, logging, and the staff feed.
+There are no raid settings to tune. Quarantine duration, recent joins, logging, and the staff feed have their own settings.
 
 ## Operation
 
