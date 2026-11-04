@@ -19,6 +19,8 @@ import java.util.concurrent.CompletionException;
 
 public class ECCCommand extends SimplePlexCommand
 {
+    private static final String STATUS_PERMISSION = "plex.ecc.status";
+
     private final ECCModule module;
 
     public ECCCommand(ECCModule module)
@@ -26,7 +28,6 @@ public class ECCCommand extends SimplePlexCommand
         super(command("ecc")
                 .description("Show the state of chat safety, or turn its alerts off and on")
                 .usage("/<command> <status | alerts>")
-                .permission("plex.ecc.status")
                 .build());
         this.module = module;
     }
@@ -34,8 +35,12 @@ public class ECCCommand extends SimplePlexCommand
     @Override
     protected void configureCommand(LiteralArgumentBuilder<CommandSourceStack> command)
     {
+        command.requires(source -> source.getSender().hasPermission(STATUS_PERMISSION)
+                || source.getSender().hasPermission(ChatSafety.ALERTS_PERMISSION));
         command.executes(context -> executeCommand(context, (sender, player) -> usage()));
-        command.then(Commands.literal("status").executes(context -> executeCommand(context, (sender, player) ->
+        command.then(Commands.literal("status")
+                .requires(source -> source.getSender().hasPermission(STATUS_PERMISSION))
+                .executes(context -> executeCommand(context, (sender, player) ->
         {
             ChatSafety safety = module.chatSafety();
             if (safety == null)
@@ -55,13 +60,14 @@ public class ECCCommand extends SimplePlexCommand
             safety.serverStatus().whenComplete((server, failure) -> showServer(sender, server, failure));
             return null;
         })));
-        command.then(Commands.literal("alerts").executes(context -> executeCommand(context, (sender, player) ->
+        command.then(Commands.literal("alerts")
+                .requires(source -> source.getSender().hasPermission(ChatSafety.ALERTS_PERMISSION))
+                .executes(context -> executeCommand(context, (sender, player) ->
         {
             if (!(sender instanceof Player staff))
             {
                 return messageComponent("noPermissionConsole");
             }
-            checkPermission(sender, ChatSafety.ALERTS_PERMISSION);
             ChatSafety safety = module.chatSafety();
             if (safety == null)
             {
