@@ -1,6 +1,6 @@
-package dev.plex.nush;
+package dev.plex.ecc.nush;
 
-import dev.plex.NUSHModule;
+import dev.plex.ECCModule;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 
 import java.util.EnumMap;
@@ -35,7 +35,7 @@ public class RaidDetector
     private static final int STARTUP_SECONDS = 60;
     private static final int QUIET_SECONDS = 120;
 
-    private final NUSHModule module;
+    private final ECCModule module;
     private final StaffFeed feed;
     private final Map<Signal, TrafficWindow> traffic = new EnumMap<>(Signal.class);
     private final long started = System.nanoTime();
@@ -46,7 +46,7 @@ public class RaidDetector
     private long lastElevated;
     private long lastSample = -1;
 
-    public RaidDetector(NUSHModule module, StaffFeed feed)
+    public RaidDetector(ECCModule module, StaffFeed feed)
     {
         this.module = module;
         this.feed = feed;

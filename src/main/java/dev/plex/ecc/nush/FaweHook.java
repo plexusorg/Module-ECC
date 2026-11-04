@@ -1,4 +1,4 @@
-package dev.plex.nush;
+package dev.plex.ecc.nush;
 
 import com.fastasyncworldedit.core.configuration.Settings;
 import com.sk89q.worldedit.EditSession.Stage;
@@ -7,9 +7,9 @@ import com.sk89q.worldedit.event.extent.EditSessionEvent;
 import com.sk89q.worldedit.extension.platform.Actor;
 import com.sk89q.worldedit.util.eventbus.Subscribe;
 import com.sk89q.worldedit.world.World;
-import dev.plex.NUSHModule;
-import dev.plex.nush.Quarantine.Kind;
-import dev.plex.nush.Quarantine.LogEntry;
+import dev.plex.ECCModule;
+import dev.plex.ecc.nush.Quarantine.Kind;
+import dev.plex.ecc.nush.Quarantine.LogEntry;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -20,9 +20,9 @@ import java.util.UUID;
 
 public class FaweHook
 {
-    private final NUSHModule module;
+    private final ECCModule module;
 
-    public FaweHook(NUSHModule module)
+    public FaweHook(ECCModule module)
     {
         this.module = module;
     }

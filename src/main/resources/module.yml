@@ -1,5 +1,5 @@
-name: Module-NUSH
-main: dev.plex.NUSHModule
-description: Raid protection from new players
+name: Module-ECC
+main: dev.plex.ECCModule
+description: Extra Chat Controls: NUSH raid protection plus chat safety
 version: 2.0.1-SNAPSHOT
 apiCompatibility: 1

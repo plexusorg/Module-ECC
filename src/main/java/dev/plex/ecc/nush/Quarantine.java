@@ -1,6 +1,6 @@
-package dev.plex.nush;
+package dev.plex.ecc.nush;
 
-import dev.plex.NUSHModule;
+import dev.plex.ECCModule;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
@@ -42,7 +42,7 @@ public class Quarantine
     private static final int TRUST_CACHE_LIMIT = 4096;
     private static final long TRUST_CACHE_NANOS = TimeUnit.SECONDS.toNanos(30);
 
-    private final NUSHModule module;
+    private final ECCModule module;
     private final StaffFeed feed;
     private final ScheduledExecutorService executor;
     private final int logSize;
@@ -57,7 +57,7 @@ public class Quarantine
     private boolean sweepExistingSessions;
     private boolean closed;
 
-    public Quarantine(NUSHModule module, StaffFeed feed, ScheduledExecutorService executor, int logSize, int recentJoinMinutes)
+    public Quarantine(ECCModule module, StaffFeed feed, ScheduledExecutorService executor, int logSize, int recentJoinMinutes)
     {
         this.module = module;
         this.feed = feed;

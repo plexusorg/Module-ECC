@@ -1,9 +1,9 @@
 package dev.plex.listener;
 
-import dev.plex.NUSHModule;
-import dev.plex.nush.Quarantine.Kind;
-import dev.plex.nush.Quarantine.LogEntry;
-import dev.plex.nush.RaidDetector.Signal;
+import dev.plex.ECCModule;
+import dev.plex.ecc.nush.Quarantine.Kind;
+import dev.plex.ecc.nush.Quarantine.LogEntry;
+import dev.plex.ecc.nush.RaidDetector.Signal;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -17,9 +17,9 @@ import java.util.UUID;
 
 public class ChatListener implements Listener
 {
-    private final NUSHModule module;
+    private final ECCModule module;
 
-    public ChatListener(NUSHModule module)
+    public ChatListener(ECCModule module)
     {
         this.module = module;
     }

@@ -1,7 +1,7 @@
-package dev.plex.nush;
+package dev.plex.ecc.nush;
 
-import dev.plex.NUSHModule;
-import dev.plex.nush.Quarantine.Kind;
+import dev.plex.ECCModule;
+import dev.plex.ecc.nush.Quarantine.Kind;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
@@ -24,7 +24,7 @@ public class StaffFeed
 {
     public static final String VIEW_PERMISSION = "plex.nush.view";
 
-    private final NUSHModule module;
+    private final ECCModule module;
     private final ScheduledExecutorService executor;
     private final int intervalSeconds;
     private final int digestThreshold;
@@ -40,7 +40,7 @@ public class StaffFeed
     private int messages;
     private int blockedCommands;
 
-    public StaffFeed(NUSHModule module, ScheduledExecutorService executor, int intervalSeconds, int digestThreshold)
+    public StaffFeed(ECCModule module, ScheduledExecutorService executor, int intervalSeconds, int digestThreshold)
     {
         this.module = module;
         this.executor = executor;

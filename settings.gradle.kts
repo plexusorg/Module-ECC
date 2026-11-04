@@ -1,1 +1,1 @@
-rootProject.name = "Module-NUSH"
+rootProject.name = "Module-ECC"

@@ -1,9 +1,9 @@
 package dev.plex.listener;
 
-import dev.plex.NUSHModule;
-import dev.plex.nush.Quarantine;
-import dev.plex.nush.RaidDetector.Signal;
-import dev.plex.nush.StaffFeed;
+import dev.plex.ECCModule;
+import dev.plex.ecc.nush.Quarantine;
+import dev.plex.ecc.nush.RaidDetector.Signal;
+import dev.plex.ecc.nush.StaffFeed;
 import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -16,9 +16,9 @@ import java.util.UUID;
 
 public class JoinListener implements Listener
 {
-    private final NUSHModule module;
+    private final ECCModule module;
 
-    public JoinListener(NUSHModule module)
+    public JoinListener(ECCModule module)
     {
         this.module = module;
     }

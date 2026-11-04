@@ -38,7 +38,7 @@ dependencies {
 
 group = "dev.plex"
 version = "2.0.1-SNAPSHOT"
-description = "Module-NUSH"
+description = "Module-ECC"
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(25))
@@ -58,7 +58,7 @@ publishing {
 }
 
 tasks.getByName<Jar>("jar") {
-    archiveBaseName.set("Module-NUSH")
+    archiveBaseName.set("Module-ECC")
     archiveVersion.set("")
 }
 

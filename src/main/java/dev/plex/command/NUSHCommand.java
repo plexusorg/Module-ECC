@@ -3,9 +3,9 @@ package dev.plex.command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
-import dev.plex.NUSHModule;
-import dev.plex.nush.Quarantine.LogEntry;
-import dev.plex.nush.Quarantine.Restriction;
+import dev.plex.ECCModule;
+import dev.plex.ecc.nush.Quarantine.LogEntry;
+import dev.plex.ecc.nush.Quarantine.Restriction;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
@@ -30,9 +30,9 @@ public class NUSHCommand extends SimplePlexCommand
             "list", "log", "feed");
     private static final String ALLOW_PERMISSION = "plex.nush.allow";
 
-    private final NUSHModule module;
+    private final ECCModule module;
 
-    public NUSHCommand(NUSHModule module)
+    public NUSHCommand(ECCModule module)
     {
         super(command("nush")
                 .description("The main command to manage the NUSH module")

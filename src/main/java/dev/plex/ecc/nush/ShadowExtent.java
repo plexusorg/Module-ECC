@@ -1,4 +1,4 @@
-package dev.plex.nush;
+package dev.plex.ecc.nush;
 
 import com.fastasyncworldedit.core.function.mask.BlockMaskBuilder;
 import com.fastasyncworldedit.core.nbt.FaweCompoundTag;

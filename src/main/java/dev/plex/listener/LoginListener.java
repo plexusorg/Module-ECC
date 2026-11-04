@@ -1,6 +1,6 @@
 package dev.plex.listener;
 
-import dev.plex.NUSHModule;
+import dev.plex.ECCModule;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -9,9 +9,9 @@ import org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result;
 
 public class LoginListener implements Listener
 {
-    private final NUSHModule module;
+    private final ECCModule module;
 
-    public LoginListener(NUSHModule module)
+    public LoginListener(ECCModule module)
     {
         this.module = module;
     }

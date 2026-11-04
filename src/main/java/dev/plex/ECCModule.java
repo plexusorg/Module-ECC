@@ -7,10 +7,10 @@ import dev.plex.listener.CommandListener;
 import dev.plex.listener.JoinListener;
 import dev.plex.listener.LoginListener;
 import dev.plex.module.PlexModule;
-import dev.plex.nush.FaweHook;
-import dev.plex.nush.Quarantine;
-import dev.plex.nush.RaidDetector;
-import dev.plex.nush.StaffFeed;
+import dev.plex.ecc.nush.FaweHook;
+import dev.plex.ecc.nush.Quarantine;
+import dev.plex.ecc.nush.RaidDetector;
+import dev.plex.ecc.nush.StaffFeed;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
@@ -19,7 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
-public class NUSHModule extends PlexModule
+public class ECCModule extends PlexModule
 {
     private static final String FAWE_PLUGIN = "FastAsyncWorldEdit";
 

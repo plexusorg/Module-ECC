@@ -1,4 +1,4 @@
-package dev.plex.nush;
+package dev.plex.ecc.nush;
 
 import java.util.ArrayDeque;
 import java.util.Arrays;
