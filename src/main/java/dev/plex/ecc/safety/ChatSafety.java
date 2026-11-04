@@ -133,9 +133,7 @@ public final class ChatSafety
 
     public Status status()
     {
-        EccServer.State link = server.state();
-        return new Status(link.reachable(), link.detail(), link.since(), outbox.size(), actions.unacknowledged(),
-                muted.size());
+        return new Status(server.state().since(), outbox.size(), actions.unacknowledged(), muted.size());
     }
 
     // ECC-Server's GET /status, completed on the HTTP client's thread.
@@ -179,11 +177,10 @@ public final class ChatSafety
     }
 
     /**
-     * Chat safety as {@code /ecc status} shows it. {@code reachable} is null before the first contact with
-     * ECC-Server. {@code unacknowledged} are actions received and not yet acknowledged as done.
+     * The module's side of {@code /ecc status}: since when ECC-Server has been in its current state, messages waiting
+     * to be sent, actions received and not yet acknowledged as done, and muted players.
      */
-    public record Status(@Nullable Boolean reachable, String detail, Instant since, int buffered, int unacknowledged,
-                         int muted)
+    public record Status(Instant since, int buffered, int unacknowledged, int muted)
     {
     }
 }
