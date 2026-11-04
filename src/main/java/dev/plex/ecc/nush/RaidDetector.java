@@ -188,7 +188,7 @@ public class RaidDetector
                     Placeholder.unparsed("count", String.valueOf(window.count(now))),
                     Placeholder.unparsed("seconds", String.valueOf(spike.seconds)),
                     Placeholder.unparsed("limit", String.valueOf(window.trigger()))));
-            module.getLogger().warn("Raid detected: {} {} in {} seconds, limit {}, baseline {}. NUSH is enabled",
+            module.api().logging().warn("Raid detected: {0} {1} in {2} seconds, limit {3}, baseline {4}. NUSH is enabled",
                     window.count(now), spike.label, spike.seconds, window.trigger(), window.baseline());
         }
 
@@ -203,7 +203,7 @@ public class RaidDetector
                 raidActive = false;
                 feed.alert(module.messageComponent("raidQuiet",
                         Placeholder.unparsed("seconds", String.valueOf(QUIET_SECONDS))));
-                module.getLogger().info("Raid traffic stayed below recovery limits for {} seconds; NUSH state is unchanged",
+                module.api().logging().info("Raid traffic stayed below recovery limits for {0} seconds; NUSH state is unchanged",
                         QUIET_SECONDS);
             }
         }

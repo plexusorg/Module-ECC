@@ -2,6 +2,7 @@ package dev.plex.ecc.safety;
 
 import com.google.gson.JsonObject;
 import dev.plex.ECCModule;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.apache.logging.log4j.Logger;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
@@ -39,16 +40,18 @@ public final class ChatSafety
     private final Outbox outbox;
     private final Bans bans;
     private final Actions actions;
+    private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
+
     private final Logger logger;
 
     private ChatSafety(ECCModule module, SafetySettings settings)
     {
         this.logger = module.getLogger();
-        this.server = new EccServer(settings.eccServer(), settings.token(), module.getLogger());
+        this.server = new EccServer(settings.eccServer(), settings.token(), module.api().logging());
         this.muted = new MuteSet(module.api().storage().forModule(module));
-        this.outbox = new Outbox(server, module.getLogger());
+        this.outbox = new Outbox(server, module.api().logging());
         this.bans = new Bans(module, muted);
-        this.actions = new Actions(server, muted, bans, module.getLogger());
+        this.actions = new Actions(server, muted, bans, module.api().logging(), module.getLogger());
     }
 
     /**
@@ -63,8 +66,8 @@ public final class ChatSafety
         SafetySettings settings = SafetySettings.read(section, errors);
         if (settings == null)
         {
-            errors.forEach(error -> module.getLogger().error("Invalid chat safety setting: {}", error));
-            module.getLogger().error("Chat safety stays off until its settings are fixed");
+            errors.forEach(error -> module.api().logging().error("Invalid chat safety setting: {0}", MINI_MESSAGE.escapeTags(error)));
+            module.api().logging().error("Chat safety stays off until its settings are fixed");
             return null;
         }
         ChatSafety safety = new ChatSafety(module, settings);
@@ -80,7 +83,8 @@ public final class ChatSafety
         }
         safety.outbox.start();
         safety.actions.start();
-        module.getLogger().info("Chat safety is on with ECC-Server at {}; {} players are muted", settings.eccServer(),
+        module.api().logging().info("Chat safety is on with ECC-Server at {0}; {1} players are muted",
+                MINI_MESSAGE.escapeTags(String.valueOf(settings.eccServer())),
                 safety.muted.size());
         return safety;
     }

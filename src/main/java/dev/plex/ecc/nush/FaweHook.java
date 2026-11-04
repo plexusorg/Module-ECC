@@ -36,8 +36,8 @@ public class FaweHook
                 .anyMatch(entry -> lowerName.contains(entry.toLowerCase(Locale.ROOT)));
         if (!allowed)
         {
-            module.getLogger().error("FastAsyncWorldEdit drops the NUSH extent, so WorldEdit commands of restricted players are"
-                    + " cancelled instead. Add the line '  - {}' below extent.allowed-plugins in"
+            module.api().logging().error("FastAsyncWorldEdit drops the NUSH extent, so WorldEdit commands of restricted players are"
+                    + " cancelled instead. Add the line '  - {0}' below extent.allowed-plugins in"
                     + " plugins/FastAsyncWorldEdit/config.yml and restart the server", extentName);
             return false;
         }

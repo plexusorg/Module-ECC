@@ -3,6 +3,8 @@ package dev.plex.ecc.safety;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import dev.plex.api.logging.LoggingApi;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.Nullable;
 
@@ -35,9 +37,12 @@ final class Actions
     private static final long STOP_MILLIS = TimeUnit.SECONDS.toMillis(5);
     private static final int DETAIL_LIMIT = 500;
 
+    private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
+
     private final EccServer server;
     private final MuteSet muted;
     private final Bans bans;
+    private final LoggingApi logging;
     private final Logger logger;
     private final Thread loop;
     // The rest is used by the loop only. Actions received and not yet finished, by id, oldest first.
@@ -50,11 +55,12 @@ final class Actions
     private long retryAt = System.nanoTime();
     private volatile int unacknowledged;
 
-    Actions(EccServer server, MuteSet muted, Bans bans, Logger logger)
+    Actions(EccServer server, MuteSet muted, Bans bans, LoggingApi logging, Logger logger)
     {
         this.server = server;
         this.muted = muted;
         this.bans = bans;
+        this.logging = logging;
         this.logger = logger;
         this.loop = Thread.ofPlatform().daemon().name("Plex-ECC-Actions").unstarted(this::run);
     }
@@ -139,7 +145,7 @@ final class Actions
         }
         catch (EccServer.Rejected ex)
         {
-            logger.error("Unable to read ECC-Server's actions: it {}", ex.getMessage());
+            logging.error("Unable to read ECC-Server's actions: it {0}", MINI_MESSAGE.escapeTags(String.valueOf(ex.getMessage())));
             return Next.BACKOFF;
         }
         boolean fast = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < PACE_MILLIS / 2;
@@ -277,7 +283,8 @@ final class Actions
         }
         catch (EccServer.Rejected ex)
         {
-            logger.error("ECC-Server refused the acknowledgement of action {}: it {}", action.idText(), ex.getMessage());
+            logging.error("ECC-Server refused the acknowledgement of action {0}: it {1}", MINI_MESSAGE.escapeTags(String.valueOf(action.idText())),
+                    MINI_MESSAGE.escapeTags(String.valueOf(ex.getMessage())));
             if (ok)
             {
                 settled.add(action.idText());
@@ -322,7 +329,7 @@ final class Actions
         catch (EccServer.Rejected ex)
         {
             server.refreshFailed();
-            logger.error("Unable to read ECC-Server's mute set: it {}", ex.getMessage());
+            logging.error("Unable to read ECC-Server's mute set: it {0}", MINI_MESSAGE.escapeTags(String.valueOf(ex.getMessage())));
             return false;
         }
     }
@@ -373,7 +380,8 @@ final class Actions
         {
             if (settled.add(String.valueOf(element)))
             {
-                logger.error("ECC-Server sent an action without an id, which cannot be carried out: {}", element);
+                logging.error("ECC-Server sent an action without an id, which cannot be carried out: {0}",
+                        MINI_MESSAGE.escapeTags(String.valueOf(element)));
             }
             return null;
         }
@@ -410,7 +418,8 @@ final class Actions
         {
             return;
         }
-        logger.error("ECC-Server sent action {}, which cannot be carried out: {}", element, reason);
+        logging.error("ECC-Server sent action {0}, which cannot be carried out: {1}", MINI_MESSAGE.escapeTags(String.valueOf(element)),
+                MINI_MESSAGE.escapeTags(String.valueOf(reason)));
         try
         {
             server.ack(id, false, "invalid action: " + reason);
@@ -422,7 +431,8 @@ final class Actions
         }
         catch (EccServer.Rejected ex)
         {
-            logger.error("ECC-Server refused the acknowledgement of invalid action {}: it {}", id, ex.getMessage());
+            logging.error("ECC-Server refused the acknowledgement of invalid action {0}: it {1}", MINI_MESSAGE.escapeTags(String.valueOf(id)),
+                    MINI_MESSAGE.escapeTags(String.valueOf(ex.getMessage())));
         }
         settled.add(id.getAsString());
     }

@@ -5,7 +5,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
-import org.apache.logging.log4j.Logger;
+import dev.plex.api.logging.LoggingApi;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -31,9 +32,11 @@ final class EccServer
     private static final Duration POLL_TIMEOUT = Duration.ofSeconds(45);
     private static final int BODY_LIMIT = 300;
 
+    private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
+
     private final URI base;
     private final String authorization;
-    private final Logger logger;
+    private final LoggingApi logger;
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(CONNECT_TIMEOUT)
             .version(HttpClient.Version.HTTP_1_1)
@@ -44,7 +47,7 @@ final class EccServer
     // Guarded by lock. The mute set must be replaced from GET /muted: at start, and after every outage.
     private boolean refreshMuted = true;
 
-    EccServer(URI base, String token, Logger logger)
+    EccServer(URI base, String token, LoggingApi logger)
     {
         this.base = base;
         this.authorization = "Bearer " + token;
@@ -216,8 +219,8 @@ final class EccServer
         }
         if (returned)
         {
-            logger.warn("ECC-Server at {} answers again; chat safety sends the buffered messages and reads the mute"
-                    + " set from it", base);
+            logger.warn("ECC-Server at {0} answers again; chat safety sends the buffered messages and reads the mute"
+                    + " set from it", MINI_MESSAGE.escapeTags(String.valueOf(base)));
         }
     }
 
@@ -242,13 +245,13 @@ final class EccServer
         }
         if (unauthorized)
         {
-            logger.error("ECC-Server at {} {}; set chat_safety.token to the output of 'sudo ecc-server token'."
+            logger.error("ECC-Server at {0} {1}; set chat_safety.token to the output of 'sudo ecc-server token'."
                     + " Chat safety buffers messages, and its saved mute set decides who is muted until the server"
-                    + " accepts the token", base, reason);
+                    + " accepts the token", MINI_MESSAGE.escapeTags(String.valueOf(base)), MINI_MESSAGE.escapeTags(String.valueOf(reason)));
             return;
         }
-        logger.warn("ECC-Server at {} {}; chat safety buffers messages, and its saved mute set decides who is muted"
-                + " until the server answers", base, reason);
+        logger.warn("ECC-Server at {0} {1}; chat safety buffers messages, and its saved mute set decides who is muted"
+                + " until the server answers", MINI_MESSAGE.escapeTags(String.valueOf(base)), MINI_MESSAGE.escapeTags(String.valueOf(reason)));
     }
 
     private static JsonArray array(HttpResponse<String> response, String path) throws Rejected

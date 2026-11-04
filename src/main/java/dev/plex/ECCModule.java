@@ -100,7 +100,7 @@ public class ECCModule extends PlexModule
         }
         else
         {
-            getLogger().warn("FastAsyncWorldEdit is not enabled; WorldEdit commands of restricted players are cancelled");
+            api().logging().warn("FastAsyncWorldEdit is not enabled; WorldEdit commands of restricted players are cancelled");
         }
         raidDetector.start(executor);
         if (config.getBoolean(CHAT_SAFETY + ".enabled", false))
@@ -135,7 +135,7 @@ public class ECCModule extends PlexModule
         }
         else
         {
-            getLogger().warn("EssentialsX is not enabled; chat safety does not capture private messages, mail or /me");
+            api().logging().warn("EssentialsX is not enabled; chat safety does not capture private messages, mail or /me");
         }
     }
 

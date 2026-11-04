@@ -8,6 +8,7 @@ import dev.plex.api.punishment.PunishmentsApi;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.apache.logging.log4j.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -37,6 +38,8 @@ final class Bans
     static final String AT_RISK = "at_risk";
     private static final long WRITE_SECONDS = 30;
     private static final long TICK_MILLIS = 50;
+
+    private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
 
     private final ECCModule module;
     private final Logger logger;
@@ -109,8 +112,8 @@ final class Bans
         Optional<IndefiniteBanView> entry = bans.indefiniteBanByLabel(label);
         if (entry.isEmpty() || !entry.get().uuids().contains(uuid))
         {
-            logger.error("The indefinite-ban entry {} does not cover {} ({}), whom ECC-Server banned under that id",
-                    label, name, uuid);
+            module.api().logging().error("The indefinite-ban entry {0} does not cover {1} ({2}), whom ECC-Server banned under that id",
+                    MINI_MESSAGE.escapeTags(String.valueOf(label)), name, uuid);
             throw new Failed("entry " + label + " does not cover " + uuid);
         }
     }

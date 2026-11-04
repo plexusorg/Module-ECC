@@ -1,7 +1,8 @@
 package dev.plex.ecc.safety;
 
 import com.google.gson.JsonObject;
-import org.apache.logging.log4j.Logger;
+import dev.plex.api.logging.LoggingApi;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.jetbrains.annotations.Nullable;
 
 import java.time.Instant;
@@ -26,11 +27,12 @@ final class Outbox
     private static final long LAST_RETRY_MILLIS = TimeUnit.SECONDS.toMillis(30);
     // How long stopping waits for the sender to deliver what is still waiting.
     private static final long DRAIN_MILLIS = TimeUnit.SECONDS.toMillis(5);
+    private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSSXXX")
             .withZone(ZoneOffset.UTC);
 
     private final EccServer server;
-    private final Logger logger;
+    private final LoggingApi logger;
     private final Thread sender;
     private final Object lock = new Object();
     // Guarded by lock. Every waiting message in capture order, and the same messages by player.
@@ -42,7 +44,7 @@ final class Outbox
     private int dropped;
     private boolean closing;
 
-    Outbox(EccServer server, Logger logger)
+    Outbox(EccServer server, LoggingApi logger)
     {
         this.server = server;
         this.logger = logger;
@@ -107,7 +109,7 @@ final class Outbox
         int unsent = size();
         if (unsent > 0)
         {
-            logger.warn("Chat safety stopped with {} chat messages not sent to ECC-Server", unsent);
+            logger.warn("Chat safety stopped with {0} chat messages not sent to ECC-Server", unsent);
         }
     }
 
@@ -171,8 +173,8 @@ final class Outbox
             }
             catch (EccServer.Rejected ex)
             {
-                logger.error("ECC-Server refused chat message {}, which is not sent again: it {}",
-                        next.message().get("id").getAsString(), ex.getMessage());
+                logger.error("ECC-Server refused chat message {0}, which is not sent again: it {1}",
+                        MINI_MESSAGE.escapeTags(String.valueOf(next.message().get("id").getAsString())), MINI_MESSAGE.escapeTags(String.valueOf(ex.getMessage())));
                 return true;
             }
             catch (EccServer.Unavailable ex)
@@ -207,8 +209,8 @@ final class Outbox
         }
         if (count > 0)
         {
-            logger.warn("Chat safety dropped {} chat messages before ECC-Server took them, each the oldest of a player"
-                    + " who had {} waiting", count, PLAYER_LIMIT);
+            logger.warn("Chat safety dropped {0} chat messages before ECC-Server took them, each the oldest of a player"
+                    + " who had {1} waiting", count, PLAYER_LIMIT);
         }
     }
 
