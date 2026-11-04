@@ -26,6 +26,9 @@ import java.util.concurrent.CompletionException;
  */
 final class EccServer
 {
+    // The bounds of the doubling wait before the sender and the action loop try an unreachable server again.
+    static final long FIRST_RETRY_MILLIS = 1000;
+    static final long LAST_RETRY_MILLIS = 30_000;
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(2);
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
     // GET /actions holds the request for up to 30 seconds while there is nothing to do.

@@ -23,8 +23,6 @@ import java.util.concurrent.TimeUnit;
 final class Outbox
 {
     private static final int PLAYER_LIMIT = 500;
-    private static final long FIRST_RETRY_MILLIS = 1000;
-    private static final long LAST_RETRY_MILLIS = TimeUnit.SECONDS.toMillis(30);
     // How long stopping waits for the sender to deliver what is still waiting.
     private static final long DRAIN_MILLIS = TimeUnit.SECONDS.toMillis(5);
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
@@ -163,7 +161,7 @@ final class Outbox
     // Sends the message until the server accepts or refuses it. False when stopping while the server is unreachable.
     private boolean deliver(Waiting next) throws InterruptedException
     {
-        long retry = FIRST_RETRY_MILLIS;
+        long retry = EccServer.FIRST_RETRY_MILLIS;
         while (true)
         {
             try
@@ -194,7 +192,7 @@ final class Outbox
                         return false;
                     }
                 }
-                retry = Math.min(retry * 2, LAST_RETRY_MILLIS);
+                retry = Math.min(retry * 2, EccServer.LAST_RETRY_MILLIS);
             }
         }
     }
