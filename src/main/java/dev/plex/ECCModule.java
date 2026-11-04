@@ -4,6 +4,7 @@ import dev.plex.api.config.ModuleConfiguration;
 import dev.plex.command.ECCCommand;
 import dev.plex.command.NUSHCommand;
 import dev.plex.ecc.safety.ChatSafety;
+import dev.plex.listener.ChannelSafetyListener;
 import dev.plex.listener.ChatListener;
 import dev.plex.listener.CommandListener;
 import dev.plex.listener.EssentialsSafetyListener;
@@ -127,6 +128,7 @@ public class ECCModule extends PlexModule
         }
         chatSafety = safety;
         registerListener(new SafetyListener(this, safety));
+        registerListener(new ChannelSafetyListener(safety));
         if (Bukkit.getPluginManager().isPluginEnabled(ESSENTIALS_PLUGIN))
         {
             registerListener(new EssentialsSafetyListener(safety, Bukkit.getPluginManager().getPlugin(ESSENTIALS_PLUGIN)));
