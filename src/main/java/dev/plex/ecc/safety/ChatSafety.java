@@ -133,12 +133,6 @@ public final class ChatSafety
             finish(message, Verdict.unchecked(Verdict.BYPASS));
             return;
         }
-        if (module.raidDetector().raidActive() && !module.quarantine().isExempt(uuid))
-        {
-            remember(message);
-            finish(message, Verdict.unchecked(Verdict.RAID));
-            return;
-        }
         admit(message);
     }
 

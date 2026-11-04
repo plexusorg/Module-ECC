@@ -15,7 +15,6 @@ record Verdict(String decision, @Nullable Score score, @Nullable Decision parame
     // Recorded without a check.
     static final String SHADOWED = "shadowed";
     static final String BYPASS = "bypass";
-    static final String RAID = "raid";
     static final String DROPPED = "dropped";
     static final String UNSCORED = "unscored";
     // Sent to the model host without a usable score.
