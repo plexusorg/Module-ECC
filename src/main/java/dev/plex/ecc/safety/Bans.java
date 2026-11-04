@@ -113,7 +113,8 @@ final class Bans
         if (entry.isEmpty() || !entry.get().uuids().contains(uuid))
         {
             module.api().logging().error("The indefinite-ban entry {0} does not cover {1} ({2}), whom ECC-Server banned under that id",
-                    MINI_MESSAGE.escapeTags(String.valueOf(label)), name, uuid);
+                    MINI_MESSAGE.escapeTags(String.valueOf(label)),
+                    MINI_MESSAGE.escapeTags(String.valueOf(name)), uuid);
             throw new Failed("entry " + label + " does not cover " + uuid);
         }
     }
