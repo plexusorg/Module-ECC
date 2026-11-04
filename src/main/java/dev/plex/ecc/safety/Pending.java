@@ -15,33 +15,37 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Players the fast check triggered on, waiting for the slow check. The database row is authoritative; this owner
- * keeps every row in memory, applies the shadow mute from it, and writes each change back on the I/O executor.
+ * keeps every row in memory, applies the shadow mute from it, and writes each change back on its own writer thread.
  *
  * <p>A row's {@code state} JSON holds what the slow check needs: the trigger message, the decision parameters and
  * bundle version it was judged by, the triggering conversation's transcript and the player's own recent messages
- * (each with author, time, order and score), and the player's shadowed messages since the trigger.</p>
+ * (each with author, time, order and score), and the player's latest shadowed messages since the trigger in
+ * {@code later}, with {@code later_dropped} counting older ones that no longer fit.</p>
  */
 final class Pending
 {
     private static final long RETRY_SECONDS = 30;
+    private static final int LATER_LIMIT = 200;
 
     private final ModuleStorage storage;
     private final String table;
-    private final ScheduledExecutorService io;
     private final Logger logger;
+    private final ScheduledThreadPoolExecutor writer =
+            new ScheduledThreadPoolExecutor(1, Thread.ofPlatform().daemon().name("Plex-ECC-Pending").factory());
     private final Map<UUID, Entry> entries = new ConcurrentHashMap<>();
 
-    Pending(ModuleStorage storage, ScheduledExecutorService io, Logger logger)
+    Pending(ModuleStorage storage, Logger logger)
     {
         this.storage = storage;
         this.table = storage.table("pending");
-        this.io = io;
         this.logger = logger;
+        writer.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
     }
 
     // Applies the module's migrations and loads every pending player. Runs once, before chat safety captures anything.
@@ -75,7 +79,7 @@ final class Pending
         {
             return false;
         }
-        persist(entry, true);
+        persist(entry);
         return true;
     }
 
@@ -89,32 +93,69 @@ final class Pending
         }
         synchronized (entry)
         {
-            entry.state().getAsJsonArray("later").add(message);
+            JsonArray later = entry.state().getAsJsonArray("later");
+            later.add(message);
+            if (later.size() > LATER_LIMIT)
+            {
+                later.remove(0);
+                int dropped = entry.state().has("later_dropped") ? entry.state().get("later_dropped").getAsInt() : 0;
+                entry.state().addProperty("later_dropped", dropped + 1);
+            }
         }
-        persist(entry, false);
+        persist(entry);
     }
 
-    private void persist(Entry entry, boolean insert)
+    // Finishes queued writes, then names every player whose latest state could not be saved.
+    void close()
     {
-        io.execute(() -> write(entry, insert));
+        writer.shutdown();
+        try
+        {
+            if (!writer.awaitTermination(10, TimeUnit.SECONDS))
+            {
+                writer.shutdownNow();
+            }
+        }
+        catch (InterruptedException ex)
+        {
+            Thread.currentThread().interrupt();
+            writer.shutdownNow();
+        }
+        for (Entry entry : entries.values())
+        {
+            if (entry.unsaved())
+            {
+                logger.error("The chat safety pending state of {} ({}) was not saved; the database holds an older"
+                        + " state or none", entry.name(), entry.uuid());
+            }
+        }
     }
 
-    private void write(Entry entry, boolean insert)
+    // Queues one write of the entry's latest state; changes made before it runs share that write.
+    private void persist(Entry entry)
     {
-        if (entries.get(entry.uuid()) != entry)
+        if (!entry.markUnsaved())
         {
             return;
         }
-        String state;
-        synchronized (entry)
+        try
         {
-            state = entry.state().toString();
+            writer.execute(() -> write(entry));
         }
+        catch (RejectedExecutionException ex)
+        {
+            logger.error("Chat safety stopped before it could save the pending state of {}", entry.uuid());
+        }
+    }
+
+    private void write(Entry entry)
+    {
+        String state = entry.takeState();
         try
         {
             storage.jdbi().useTransaction(handle ->
             {
-                int updated = insert ? 0 : handle.createUpdate("UPDATE " + table + " SET state = :state WHERE player_uuid = :uuid")
+                int updated = handle.createUpdate("UPDATE " + table + " SET state = :state WHERE player_uuid = :uuid")
                         .bind("state", state)
                         .bind("uuid", entry.uuid().toString())
                         .execute();
@@ -132,14 +173,12 @@ final class Pending
         }
         catch (JdbiException ex)
         {
-            if (io.isShutdown())
-            {
-                logger.error("Unable to save the chat safety pending state of {} before shutdown", entry.uuid(), ex);
-                return;
-            }
             logger.error("Unable to save the chat safety pending state of {}; retrying in {} seconds", entry.uuid(),
                     RETRY_SECONDS, ex);
-            io.schedule(() -> write(entry, false), RETRY_SECONDS, TimeUnit.SECONDS);
+            if (entry.markUnsaved())
+            {
+                writer.schedule(() -> write(entry), RETRY_SECONDS, TimeUnit.SECONDS);
+            }
         }
     }
 
@@ -147,23 +186,75 @@ final class Pending
     {
         try
         {
-            JsonObject json = JsonParser.parseString(state).getAsJsonObject();
-            if (json.get("later") instanceof JsonArray)
+            if (JsonParser.parseString(state) instanceof JsonObject json && json.get("later") instanceof JsonArray)
             {
                 return json;
             }
         }
-        catch (JsonParseException | IllegalStateException ex)
+        catch (JsonParseException ex)
         {
-            throw new IllegalStateException("The chat safety pending state of " + uuid + " is not a JSON object", ex);
+            throw new IllegalStateException("The chat safety pending state of " + uuid + " is not valid JSON", ex);
         }
-        throw new IllegalStateException("The chat safety pending state of " + uuid + " has no 'later' list");
+        throw new IllegalStateException("The chat safety pending state of " + uuid + " is not an object with a 'later' list");
     }
 
     /**
      * One pending player. Mutate {@code state} only while holding the entry's monitor.
      */
-    record Entry(UUID uuid, String name, Instant triggeredAt, JsonObject state)
+    static final class Entry
     {
+        private final UUID uuid;
+        private final String name;
+        private final Instant triggeredAt;
+        private final JsonObject state;
+        // Guarded by this entry's monitor: a write of the latest state is queued or waiting to be retried.
+        private boolean unsaved;
+
+        private Entry(UUID uuid, String name, Instant triggeredAt, JsonObject state)
+        {
+            this.uuid = uuid;
+            this.name = name;
+            this.triggeredAt = triggeredAt;
+            this.state = state;
+        }
+
+        UUID uuid()
+        {
+            return uuid;
+        }
+
+        String name()
+        {
+            return name;
+        }
+
+        Instant triggeredAt()
+        {
+            return triggeredAt;
+        }
+
+        JsonObject state()
+        {
+            return state;
+        }
+
+        // Returns true when no write was queued yet, so the caller queues one.
+        private synchronized boolean markUnsaved()
+        {
+            boolean queue = !unsaved;
+            unsaved = true;
+            return queue;
+        }
+
+        private synchronized String takeState()
+        {
+            unsaved = false;
+            return state.toString();
+        }
+
+        private synchronized boolean unsaved()
+        {
+            return unsaved;
+        }
     }
 }

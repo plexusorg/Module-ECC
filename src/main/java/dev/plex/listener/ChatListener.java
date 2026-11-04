@@ -37,6 +37,10 @@ public class ChatListener implements Listener
         }
         boolean quarantined = module.isEnabled() && module.quarantine().isRestricted(uuid);
         ChatSafety safety = module.chatSafety();
+        if (safety == null && !quarantined)
+        {
+            return;
+        }
         boolean shadowed = quarantined || safety != null && safety.isShadowMuted(uuid);
         String text = PlainTextComponentSerializer.plainText().serialize(event.message());
         if (safety != null)

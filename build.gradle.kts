@@ -64,8 +64,10 @@ publishing {
     }
 }
 
+// The deployable jar is the shaded one; the plain jar lacks the record's zstd compressor.
 tasks.getByName<Jar>("jar") {
     archiveBaseName.set("Module-ECC")
+    archiveClassifier.set("plain")
     archiveVersion.set("")
 }
 

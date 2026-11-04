@@ -15,8 +15,9 @@ import java.util.function.BiConsumer;
 
 /**
  * The fast check: one bounded queue per player, served in turn, and one worker that sends each message to the model
- * host. Messages reach the host one at a time, in the order they are taken. While the host is down or not ready the
- * worker keeps retrying the message it holds; the others wait in their queues.
+ * host. Messages reach the host one at a time, and each conversation's messages in the order they were submitted.
+ * While the host is down or not ready the worker keeps retrying the message it holds; the others wait in their
+ * queues.
  */
 final class Scorer
 {
@@ -33,6 +34,8 @@ final class Scorer
     // Guarded by lock.
     private final Map<UUID, ArrayDeque<Message>> queues = new HashMap<>();
     private final ArrayDeque<UUID> turns = new ArrayDeque<>();
+    // The same waiting messages by conversation, in the order they were submitted.
+    private final Map<String, ArrayDeque<Message>> conversations = new HashMap<>();
     private int waiting;
     private @Nullable Message held;
     private boolean closed;
@@ -80,12 +83,24 @@ final class Scorer
         else if (queue.size() >= queueSize)
         {
             dropped = queue.pollFirst();
+            unlist(dropped);
             waiting--;
         }
         queue.addLast(message);
+        conversations.computeIfAbsent(message.conversation(), key -> new ArrayDeque<>()).addLast(message);
         waiting++;
         lock.notifyAll();
         return dropped;
+    }
+
+    private void unlist(Message message)
+    {
+        ArrayDeque<Message> conversation = conversations.get(message.conversation());
+        conversation.remove(message);
+        if (conversation.isEmpty())
+        {
+            conversations.remove(message.conversation());
+        }
     }
 
     int backlog()
@@ -117,6 +132,7 @@ final class Scorer
             queues.values().forEach(unscored::addAll);
             queues.clear();
             turns.clear();
+            conversations.clear();
             waiting = 0;
             lock.notifyAll();
         }
@@ -129,6 +145,7 @@ final class Scorer
         {
             Thread.currentThread().interrupt();
         }
+        host.close();
         unscored.forEach(message -> finisher.accept(message, Verdict.unchecked(Verdict.UNSCORED)));
     }
 
@@ -154,6 +171,7 @@ final class Scorer
         catch (InterruptedException ex)
         {
             // close() interrupts the worker; the message it holds is recorded as unscored below.
+            Thread.currentThread().interrupt();
         }
         catch (RuntimeException ex)
         {
@@ -193,13 +211,24 @@ final class Scorer
             {
                 return null;
             }
-            ArrayDeque<Message> queue = queues.get(player);
-            held = queue.pollFirst();
+            // The player whose turn it is has their conversation served, oldest waiting message first, so the host
+            // receives each conversation in the order it was said.
+            String conversation = queues.get(player).peekFirst().conversation();
+            held = conversations.get(conversation).peekFirst();
+            unlist(held);
+            UUID author = held.speakerUuid();
+            ArrayDeque<Message> queue = queues.get(author);
+            queue.remove(held);
             if (queue.isEmpty())
             {
-                queues.remove(player);
+                queues.remove(author);
+                turns.remove(author);
             }
-            else
+            if (!author.equals(player))
+            {
+                turns.addFirst(player);
+            }
+            else if (!queue.isEmpty())
             {
                 turns.addLast(player);
             }

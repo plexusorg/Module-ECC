@@ -8,8 +8,10 @@ import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 
 /**
@@ -18,7 +20,9 @@ import java.time.Duration;
 final class ModelHost
 {
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(2);
-    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(15);
+    // Longer than the host's own two-minute limit on llama-server, so a slow score is not abandoned while the host
+    // still adds it to the window.
+    private static final Duration REQUEST_TIMEOUT = Duration.ofMinutes(3);
 
     private final URI base;
     private final HttpClient client = HttpClient.newBuilder()
@@ -36,7 +40,7 @@ final class ModelHost
      *
      * @throws Unavailable the host is down or not ready, or llama-server failed; the message was not added to the
      *                     window, so send it again
-     * @throws NoScore     the message was added to the window but has no score; do not send it again
+     * @throws NoScore     the message may be in the window but has no score; do not send it again
      */
     Verdict.Score score(String conversation, String speaker, String text) throws Unavailable, NoScore, InterruptedException
     {
@@ -44,24 +48,34 @@ final class ModelHost
         body.addProperty("conversation", conversation);
         body.addProperty("speaker", speaker);
         body.addProperty("text", text);
-        HttpResponse<String> response = send(HttpRequest.newBuilder(base.resolve(base.getPath() + "/score"))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(body.toString())));
-        switch (response.statusCode())
+        HttpResponse<String> response;
+        try
         {
-            case 200 ->
+            response = send(request("/score")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body.toString())));
+        }
+        catch (HttpTimeoutException ex)
+        {
+            // The host finishes a request it already started and adds the line, so a resend would add it twice.
+            throw new NoScore("the host did not answer within " + REQUEST_TIMEOUT.toMinutes() + " minutes");
+        }
+        try
+        {
+            switch (response.statusCode())
             {
-                JsonObject json = parse(response, "/score");
-                double pBan = number(json, "p_ban");
-                double margin = number(json, "margin");
-                if (pBan < 0 || pBan > 1)
+                case 200 ->
                 {
-                    throw new NoScore("the host returned p_ban " + pBan + ", outside 0 to 1");
+                    JsonObject json = parse(response, "/score");
+                    return new Verdict.Score(probability(json, "p_ban"), number(json, "margin"), text(json, "version"));
                 }
-                return new Verdict.Score(pBan, margin, text(json, "version"));
+                case 422, 400 -> throw new NoScore("the host answered " + response.statusCode() + ": " + response.body());
+                default -> throw new Unavailable("answered " + response.statusCode() + " to /score: " + response.body());
             }
-            case 422, 400 -> throw new NoScore("the host answered " + response.statusCode() + ": " + response.body());
-            default -> throw new Unavailable("answered " + response.statusCode() + " to /score: " + response.body());
+        }
+        catch (Invalid ex)
+        {
+            throw new NoScore("the host's score is invalid: " + ex.getMessage());
         }
     }
 
@@ -72,7 +86,7 @@ final class ModelHost
      */
     Decision decision() throws Unavailable, InterruptedException
     {
-        HttpResponse<String> response = send(HttpRequest.newBuilder(base.resolve(base.getPath() + "/bundle")).GET());
+        HttpResponse<String> response = sendOrUnavailable(request("/bundle").GET());
         if (response.statusCode() != 200)
         {
             throw new Unavailable("answered " + response.statusCode() + " to /bundle: " + response.body());
@@ -80,23 +94,21 @@ final class ModelHost
         try
         {
             JsonObject json = parse(response, "/bundle");
-            JsonElement decision = json.get("decision");
-            if (decision == null || !decision.isJsonObject())
+            if (!(json.get("decision") instanceof JsonObject parameters))
             {
-                throw new NoScore("/bundle has no decision object");
+                throw new Invalid("/bundle has no decision object");
             }
-            JsonObject parameters = decision.getAsJsonObject();
             String rule = text(parameters, "window_rule");
             if (!Decision.SINGLE.equals(rule))
             {
                 throw new Unavailable("serves window rule '" + rule + "', which this module does not apply");
             }
-            return new Decision(text(json, "version"), rule, threshold(parameters, "trigger"),
-                    threshold(parameters, "clearing"), threshold(parameters, "corroboration"));
+            return new Decision(text(json, "version"), rule, probability(parameters, "trigger"),
+                    probability(parameters, "clearing"), probability(parameters, "corroboration"));
         }
-        catch (NoScore invalid)
+        catch (Invalid ex)
         {
-            throw new Unavailable("serves invalid decision parameters: " + invalid.getMessage());
+            throw new Unavailable("serves invalid decision parameters: " + ex.getMessage());
         }
     }
 
@@ -107,70 +119,97 @@ final class ModelHost
      */
     void health() throws Unavailable, InterruptedException
     {
-        HttpResponse<String> response = send(HttpRequest.newBuilder(base.resolve(base.getPath() + "/health")).GET());
+        HttpResponse<String> response = sendOrUnavailable(request("/health").GET());
         if (response.statusCode() != 200)
         {
             throw new Unavailable("is not ready (" + response.statusCode() + "): " + response.body());
         }
     }
 
-    private HttpResponse<String> send(HttpRequest.Builder request) throws Unavailable, InterruptedException
+    void close()
+    {
+        client.shutdownNow();
+    }
+
+    private HttpRequest.Builder request(String path)
+    {
+        return HttpRequest.newBuilder(base.resolve(base.getPath() + path)).timeout(REQUEST_TIMEOUT);
+    }
+
+    // A request that never connected, or failed before an answer, did not reach the host's window.
+    private HttpResponse<String> send(HttpRequest.Builder request)
+            throws Unavailable, HttpTimeoutException, InterruptedException
     {
         try
         {
-            return client.send(request.timeout(REQUEST_TIMEOUT).build(), HttpResponse.BodyHandlers.ofString());
+            return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
         }
         catch (IOException ex)
         {
+            if (ex instanceof HttpTimeoutException timeout && !(ex instanceof HttpConnectTimeoutException))
+            {
+                throw timeout;
+            }
             throw new Unavailable("is unreachable: " + ex);
         }
     }
 
-    private static JsonObject parse(HttpResponse<String> response, String path) throws NoScore
+    private HttpResponse<String> sendOrUnavailable(HttpRequest.Builder request) throws Unavailable, InterruptedException
     {
         try
         {
-            JsonElement json = JsonParser.parseString(response.body());
-            if (!json.isJsonObject())
-            {
-                throw new NoScore(path + " did not return a JSON object");
-            }
-            return json.getAsJsonObject();
+            return send(request);
         }
-        catch (JsonParseException ex)
+        catch (HttpTimeoutException ex)
         {
-            throw new NoScore(path + " returned invalid JSON: " + ex.getMessage());
+            throw new Unavailable("did not answer within " + REQUEST_TIMEOUT.toMinutes() + " minutes");
         }
     }
 
-    private static double number(JsonObject json, String key) throws NoScore
+    private static JsonObject parse(HttpResponse<String> response, String path) throws Invalid
+    {
+        try
+        {
+            if (JsonParser.parseString(response.body()) instanceof JsonObject json)
+            {
+                return json;
+            }
+            throw new Invalid(path + " did not return a JSON object");
+        }
+        catch (JsonParseException ex)
+        {
+            throw new Invalid(path + " returned invalid JSON: " + ex.getMessage());
+        }
+    }
+
+    private static double number(JsonObject json, String key) throws Invalid
     {
         JsonElement value = json.get(key);
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()
                 || !Double.isFinite(value.getAsDouble()))
         {
-            throw new NoScore("'" + key + "' is missing or not a finite number");
+            throw new Invalid("'" + key + "' is missing or not a finite number");
         }
         return value.getAsDouble();
     }
 
-    private static double threshold(JsonObject json, String key) throws NoScore
+    private static double probability(JsonObject json, String key) throws Invalid
     {
         double value = number(json, key);
         if (value < 0 || value > 1)
         {
-            throw new NoScore("'" + key + "' is " + value + ", outside 0 to 1");
+            throw new Invalid("'" + key + "' is " + value + ", outside 0 to 1");
         }
         return value;
     }
 
-    private static String text(JsonObject json, String key) throws NoScore
+    private static String text(JsonObject json, String key) throws Invalid
     {
         JsonElement value = json.get(key);
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
                 || value.getAsString().isBlank())
         {
-            throw new NoScore("'" + key + "' is missing or empty");
+            throw new Invalid("'" + key + "' is missing or empty");
         }
         return value.getAsString();
     }
@@ -187,11 +226,20 @@ final class ModelHost
     }
 
     /**
-     * The message reached the host's window but has no usable score.
+     * The message may be in the host's window but has no usable score.
      */
     static final class NoScore extends Exception
     {
         NoScore(String reason)
+        {
+            super(reason);
+        }
+    }
+
+    // A host answer that breaks the interface.
+    private static final class Invalid extends Exception
+    {
+        Invalid(String reason)
         {
             super(reason);
         }

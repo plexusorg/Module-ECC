@@ -21,8 +21,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Chat safety: capture, the flood and duplicate rule, the fast check, and the trigger. It exists only while its
@@ -49,7 +47,6 @@ public final class ChatSafety
     private static final int HISTORY_KEYS = 1024;
 
     private final ECCModule module;
-    private final ScheduledThreadPoolExecutor io;
     private final RecordLog record;
     private final Pending pending;
     private final Scorer scorer;
@@ -64,11 +61,9 @@ public final class ChatSafety
     private ChatSafety(ECCModule module, SafetySettings settings)
     {
         this.module = module;
-        this.io = new ScheduledThreadPoolExecutor(1, Thread.ofPlatform().daemon().name("Plex-ECC-IO").factory());
-        io.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         this.record = new RecordLog(module.getDataFolder().toPath().resolve("chat-safety"), settings.server(),
-                settings.recordRetentionDays(), io, module.getLogger());
-        this.pending = new Pending(module.api().storage().forModule(module), io, module.getLogger());
+                settings.recordRetentionDays(), module.getLogger());
+        this.pending = new Pending(module.api().storage().forModule(module), module.getLogger());
         this.scorer = new Scorer(new ModelHost(settings.modelHost()), module.getLogger(), settings.queueSize(),
                 this::finish);
     }
@@ -99,7 +94,7 @@ public final class ChatSafety
         }
         catch (SQLException | IOException | RuntimeException ex)
         {
-            safety.io.shutdownNow();
+            safety.close();
             throw new IllegalStateException("Chat safety could not open its pending state or record", ex);
         }
         safety.scorer.start();
@@ -312,22 +307,10 @@ public final class ChatSafety
     public void close()
     {
         closed = true;
+        // The scorer records every message it did not score before the record and pending state close.
         scorer.close();
         record.close();
-        io.shutdown();
-        try
-        {
-            if (!io.awaitTermination(10, TimeUnit.SECONDS))
-            {
-                module.getLogger().error("Chat safety did not finish writing its record and pending state in time");
-                io.shutdownNow();
-            }
-        }
-        catch (InterruptedException ex)
-        {
-            Thread.currentThread().interrupt();
-            io.shutdownNow();
-        }
+        pending.close();
     }
 
     // Private messages and mail between two players are one conversation.
