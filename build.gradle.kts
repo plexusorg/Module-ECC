@@ -32,7 +32,7 @@ dependencies {
     compileOnly("io.papermc.paper:paper-api:26.2.build.+")
     compileOnly("dev.plex:api:2.0.1-SNAPSHOT")
     compileOnly(platform("com.intellectualsites.bom:bom-newest:1.56"))
-    compileOnly("com.fastasyncworldedit:FastAsyncWorldEdit-Core")
+    compileOnly("com.fastasyncworldedit:FastAsyncWorldEdit-Core:2.16.2")
     compileOnly("net.essentialsx:EssentialsX:2.22.1-SNAPSHOT")
     compileOnly("com.discordsrv:discordsrv:1.30.5")
 }
@@ -46,7 +46,7 @@ java {
 }
 
 checkstyle {
-    toolVersion = "14.3.0"
+    toolVersion = "14.4.0"
     configFile = rootProject.file("config/checkstyle/checkstyle.xml")
 }
 
