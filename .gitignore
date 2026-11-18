@@ -13,3 +13,7 @@ Thumbs.db
 # Gradle
 /build/
 /.gradle/
+
+# End-to-end rig: fetched jars, the server folder and bun's packages
+e2e/work/
+e2e/node_modules/

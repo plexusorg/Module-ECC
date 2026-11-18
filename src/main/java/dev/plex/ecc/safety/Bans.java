@@ -5,10 +5,9 @@ import dev.plex.api.player.PlexPlayerView;
 import dev.plex.api.punishment.IndefiniteBanRequest;
 import dev.plex.api.punishment.IndefiniteBanView;
 import dev.plex.api.punishment.PunishmentsApi;
-import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.apache.logging.log4j.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -16,60 +15,43 @@ import org.bukkit.event.player.PlayerKickEvent;
 import org.jetbrains.annotations.Nullable;
 
 import java.net.InetSocketAddress;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Carries out ECC-Server's bans: the indefinite-ban entry written through Plex, then the kick at the time the server
- * chose. The player is muted from the ban until the kick. The screens and reasons are fixed templates from
- * messages.yml; the offender is kicked with Plex's own indefinite-ban screen, which their next login shows too.
+ * Carries out ECC-Server's bans: the indefinite-ban entry written through Plex, then an immediate kick with Plex's
+ * indefinite-ban screen, which the player's next login shows too. The reason is a fixed template from messages.yml.
  */
 final class Bans
 {
-    static final String OFFENDER = "offender";
-    static final String AT_RISK = "at_risk";
     private static final long WRITE_SECONDS = 30;
-    private static final long TICK_MILLIS = 50;
 
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
 
     private final ECCModule module;
     private final Logger logger;
-    private final MuteSet muted;
-    private final String offenderReason;
-    private final String atRiskReason;
-    private final String welfareScreen;
-    private final Component offenderKick;
-    private final Component welfareKick;
-    // Banned players who are online: the kick screen each is waiting for.
-    private final Map<UUID, Component> awaitingKick = new ConcurrentHashMap<>();
+    private final String reason;
+    private final Component screen;
 
-    Bans(ECCModule module, MuteSet muted)
+    Bans(ECCModule module)
     {
         this.module = module;
         this.logger = module.getLogger();
-        this.muted = muted;
-        this.offenderReason = module.messageString("chatSafetyOffenderReason");
-        this.atRiskReason = module.messageString("chatSafetyAtRiskReason");
-        this.welfareScreen = module.messageString("chatSafetyWelfareScreen");
-        this.welfareKick = module.messageComponent("chatSafetyWelfareScreen");
-        this.offenderKick = module.api().messages().messageComponent("indefBanMessageReason",
+        this.reason = module.messageString("chatSafetyBanReason");
+        this.screen = module.api().messages().messageComponent("indefBanMessageReason",
                 Placeholder.unparsed("type", "UUID"),
                 Placeholder.parsed("appeal_url", module.api().configuration().mainConfig().getString("banning.ban_url", "")),
-                Placeholder.unparsed("reason", offenderReason));
+                Placeholder.unparsed("reason", reason));
     }
 
     /**
-     * Writes the indefinite-ban entry {@code ecc-<action id>} (UUID, name and IP) unless it exists, then schedules the
-     * kick. Runs on the action loop's thread.
+     * Writes the indefinite-ban entry {@code ecc-<action id>} unless it exists, then kicks the player if they are
+     * online. The entry holds the UUID, the name Bukkit or Plex holds for that UUID, and the IP: Plex refuses every
+     * login under a listed name, so a name another account owns is never written. Runs on the action loop's thread.
      *
      * @return what was done, for the acknowledgement
      * @throws Failed when the entry could not be written; the ban is applied again
@@ -77,17 +59,18 @@ final class Bans
     String ban(Actions.Action action) throws Failed, InterruptedException
     {
         UUID uuid = action.uuid();
-        boolean atRisk = AT_RISK.equals(action.role());
-        muted.add(uuid, action.name());
         // Bukkit's player lookup by UUID reads a concurrent map on Folia, so it is safe off a region thread.
         Player player = Bukkit.getPlayer(uuid);
         String label = "ecc-" + action.idText();
         PunishmentsApi bans = module.api().punishments();
         String written = "entry " + label + " exists";
+        String name = action.account();
         if (bans.indefiniteBanByLabel(label).isEmpty())
         {
-            IndefiniteBanRequest request = new IndefiniteBanRequest(label, atRisk ? atRiskReason : offenderReason,
-                    atRisk ? welfareScreen : "", List.of(action.name()), List.of(uuid), ip(uuid, player));
+            Optional<PlexPlayerView> view = player == null ? view(uuid) : Optional.empty();
+            name = name(uuid, player, view, name);
+            IndefiniteBanRequest request = new IndefiniteBanRequest(label, reason, "",
+                    name == null ? List.of() : List.of(name), List.of(uuid), ip(player, view));
             try
             {
                 if (bans.createIndefiniteBan(request).get(WRITE_SECONDS, TimeUnit.SECONDS))
@@ -97,13 +80,18 @@ final class Bans
             }
             catch (ExecutionException | TimeoutException | IllegalArgumentException ex)
             {
-                logger.error("Unable to write the chat safety ban of {} ({}); it is applied again", action.name(), uuid,
-                        ex);
+                logger.error("Unable to write the chat safety ban of {} ({}); it is applied again", name, uuid, ex);
                 throw new Failed("unable to write entry " + label + ": " + ex);
             }
         }
-        requireCovers(bans, label, uuid, action.name());
-        return written + "; " + kick(uuid, player, atRisk ? welfareKick : offenderKick, action.kickAt());
+        requireCovers(bans, label, uuid, name);
+        if (player == null)
+        {
+            return written + "; offline";
+        }
+        module.ownTask(player.getScheduler().run(module.plugin(),
+                task -> player.kick(screen, PlayerKickEvent.Cause.BANNED), null));
+        return written + "; kicked";
     }
 
     // An existing entry with the label must be this player's, so a reused action id never passes as their ban.
@@ -119,8 +107,43 @@ final class Bans
         }
     }
 
+    // Plex's record of an offline player, or empty when it has none or cannot be read.
+    private Optional<PlexPlayerView> view(UUID uuid) throws InterruptedException
+    {
+        try
+        {
+            return module.api().players().player(uuid).get(WRITE_SECONDS, TimeUnit.SECONDS);
+        }
+        catch (ExecutionException | TimeoutException ex)
+        {
+            logger.warn("Unable to read Plex's record of {}; the chat safety ban takes the name and IP it can", uuid,
+                    ex);
+            return Optional.empty();
+        }
+    }
+
+    // The name of the account with this UUID: the online player's, else Plex's record of it, else Bukkit's, else the
+    // account name the module sent with the player's lines, which the action carries; null when none is known, and
+    // then the entry lists no name.
+    @Nullable
+    private static String name(UUID uuid, @Nullable Player player, Optional<PlexPlayerView> view,
+                               @Nullable String account)
+    {
+        if (player != null)
+        {
+            return player.getName();
+        }
+        String plex = view.map(PlexPlayerView::name).filter(name -> !name.isEmpty()).orElse(null);
+        if (plex != null)
+        {
+            return plex;
+        }
+        String bukkit = Bukkit.getOfflinePlayer(uuid).getName();
+        return bukkit != null ? bukkit : account;
+    }
+
     // The online player's address, else the last IP Plex recorded for them, else none.
-    private List<String> ip(UUID uuid, @Nullable Player player) throws InterruptedException
+    private static List<String> ip(@Nullable Player player, Optional<PlexPlayerView> view)
     {
         InetSocketAddress address = player == null ? null : player.getAddress();
         if (address != null && address.getAddress() != null)
@@ -129,66 +152,8 @@ final class Bans
             int scope = host.indexOf('%');
             return List.of(scope < 0 ? host : host.substring(0, scope));
         }
-        try
-        {
-            Optional<PlexPlayerView> view = module.api().players().player(uuid).get(WRITE_SECONDS, TimeUnit.SECONDS);
-            List<String> ips = view.map(PlexPlayerView::ips).orElse(List.of());
-            return ips.isEmpty() ? List.of() : List.of(ips.getLast());
-        }
-        catch (ExecutionException | TimeoutException ex)
-        {
-            logger.warn("Unable to read the last IP of {}; the chat safety ban covers their UUID and name only", uuid,
-                    ex);
-            return List.of();
-        }
-    }
-
-    // Kicks an online player at the given time on their own scheduler; they stay muted until then.
-    private String kick(UUID uuid, @Nullable Player player, Component screen, Instant at)
-    {
-        if (player == null)
-        {
-            muted.remove(uuid);
-            return "offline, not kicked";
-        }
-        if (awaitingKick.putIfAbsent(uuid, screen) != null)
-        {
-            return "kick already scheduled";
-        }
-        long delay = Math.max(1, Math.ceilDiv(Duration.between(Instant.now(), at).toMillis(), TICK_MILLIS));
-        ScheduledTask task = player.getScheduler().runDelayed(module.plugin(), scheduled ->
-        {
-            player.kick(screen, PlayerKickEvent.Cause.BANNED);
-            kicked(uuid);
-        }, () -> kicked(uuid), delay);
-        if (task == null)
-        {
-            kicked(uuid);
-            return "offline, not kicked";
-        }
-        module.ownTask(task);
-        return "kick at " + at;
-    }
-
-    private void kicked(UUID uuid)
-    {
-        awaitingKick.remove(uuid);
-        muted.remove(uuid);
-    }
-
-    // Kicks every banned player still waiting for their kick, since the delayed kicks end with the module.
-    void close()
-    {
-        awaitingKick.forEach((uuid, screen) ->
-        {
-            Player player = Bukkit.getPlayer(uuid);
-            if (player != null)
-            {
-                module.kickPlayerOnShutdown(player, screen);
-            }
-            muted.remove(uuid);
-        });
-        awaitingKick.clear();
+        List<String> ips = view.map(PlexPlayerView::ips).orElse(List.of());
+        return ips.isEmpty() ? List.of() : List.of(ips.getLast());
     }
 
     /**

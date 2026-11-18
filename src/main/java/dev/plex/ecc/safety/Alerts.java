@@ -13,22 +13,20 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.jetbrains.annotations.Nullable;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Shows each action chat safety carries out, as it happens, in the console and to online players with
- * {@link ChatSafety#ALERTS_PERMISSION} who have not turned alerts off. As with the NUSH staff feed, the audience is
+ * Shows each line chat safety holds and each action it carries out, as it happens, in the console and to online
+ * players with {@link ChatSafety#ALERTS_PERMISSION} who have not turned alerts off. As with the NUSH staff feed, the audience is
  * kept from joins and quits, so sending never reads Bukkit's live player collection, and turning alerts off lasts
  * until the player leaves. Player names and text are shown as plain text.
  */
 final class Alerts implements Listener
 {
-    private static final String HELD = "held";
     private static final int TEXT_LIMIT = 256;
 
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
@@ -98,9 +96,35 @@ final class Alerts implements Listener
     }
 
     // Shows the alert of an action carried out. Runs on the action loop's thread; messaging needs no scheduler.
-    void show(Actions.Action action)
+    void show(Actions.Action action, String detail)
     {
-        Component alert = render(action);
+        if (action.type() == Actions.Type.NOTICE)
+        {
+            broadcast(module.messageComponent("chatSafetyNoticeAlert", Placeholder.unparsed("text", action.text())));
+            return;
+        }
+        TagResolver player = Placeholder.unparsed("player", name(action.uuid(), action.account()));
+        broadcast(switch (action.type())
+        {
+            case RELEASE -> module.messageComponent("chatSafetyReleaseAlert", player,
+                    Placeholder.unparsed("detail", detail));
+            case WARN -> module.messageComponent("chatSafetyWarnAlert", player);
+            case BAN, NOTICE -> module.messageComponent("chatSafetyBanAlert", player,
+                    Placeholder.unparsed("detail", detail));
+        });
+    }
+
+    // Shows a line just held: by ECC-Server's verdict, or because it did not answer in time.
+    void held(Line line, boolean answered)
+    {
+        broadcast(module.messageComponent(answered ? "chatSafetyHeldAlert" : "chatSafetyUnansweredAlert",
+                Placeholder.unparsed("player", line.speaker()),
+                Placeholder.unparsed("channel", channel(line.channel())),
+                Placeholder.unparsed("text", shortened(line.text()))));
+    }
+
+    private void broadcast(Component alert)
+    {
         module.api().logging().info("{0}",
                 MINI_MESSAGE.escapeTags(PlainTextComponentSerializer.plainText().serialize(alert)));
         for (UUID uuid : audience)
@@ -117,36 +141,15 @@ final class Alerts implements Listener
         }
     }
 
-    private Component render(Actions.Action action)
+    // The online player's name, else the account name the action carries, else the UUID.
+    private static String name(UUID uuid, @Nullable String name)
     {
-        Actions.Why why = action.why();
-        TagResolver player = Placeholder.unparsed("player", action.name());
-        return switch (action.type())
+        Player player = Bukkit.getPlayer(uuid);
+        if (player != null)
         {
-            case MUTE -> module.messageComponent("chatSafetyMuteAlert", player,
-                    Placeholder.unparsed("channel", channel(why.channel())),
-                    Placeholder.unparsed("text", shortened(why.text())));
-            case UNMUTE -> module.messageComponent("chatSafetyUnmuteAlert", player,
-                    Placeholder.unparsed("cause", unmuteCause(why.cause())));
-            case BAN -> ban(action, player);
-            case NOTICE -> HELD.equals(why.kind()) ? module.messageComponent("chatSafetyHeldAlert", player)
-                    : module.messageComponent("chatSafetyNoticeAlert", player,
-                    Placeholder.unparsed("kind", why.kind()));
-        };
-    }
-
-    // The kick time is the server's; "offline" when the player is not here to be kicked.
-    private Component ban(Actions.Action action, TagResolver player)
-    {
-        TagResolver role = Placeholder.unparsed("role", Bans.AT_RISK.equals(action.role()) ? "at risk" : "offender");
-        TagResolver cause = Placeholder.unparsed("cause", banCause(action.why().cause()));
-        if (Bukkit.getPlayer(action.uuid()) == null)
-        {
-            return module.messageComponent("chatSafetyBanOfflineAlert", player, role, cause);
+            return player.getName();
         }
-        long minutes = Math.max(0, Math.ceilDiv(Duration.between(Instant.now(), action.kickAt()).toMillis(), 60_000L));
-        return module.messageComponent("chatSafetyBanAlert", player, role, cause,
-                Placeholder.unparsed("minutes", String.valueOf(minutes)));
+        return name != null ? name : uuid.toString();
     }
 
     private static String channel(String channel)
@@ -154,40 +157,21 @@ final class Alerts implements Listener
         return switch (channel)
         {
             case ChatSafety.CHAT -> "public chat";
+            case ChatSafety.GUILD -> "guild chat";
             case ChatSafety.MSG -> "private message";
             case ChatSafety.MAIL -> "mail";
             case ChatSafety.ME -> "/me";
             case ChatSafety.NICK -> "nickname";
             case ChatSafety.SIGN -> "sign";
             case ChatSafety.BOOK -> "book";
-            case ChatSafety.ANVIL -> "item name";
-            // A module chat channel, named by its key's namespace, such as guilds:chat.
+            case ChatSafety.ITEM -> "item name";
+            case ChatSafety.TAG -> "tag";
+            // Another module chat channel, named by its key's namespace.
             default ->
             {
                 int colon = channel.indexOf(':');
                 yield (colon < 0 ? channel : channel.substring(0, colon)) + " chat";
             }
-        };
-    }
-
-    private static String unmuteCause(String cause)
-    {
-        return switch (cause)
-        {
-            case "not_involved" -> "not involved";
-            case "held_past_cap" -> "still not sure when the time limit ran out";
-            case "kicked" -> "the ban's kick time came";
-            default -> cause;
-        };
-    }
-
-    private static String banCause(String cause)
-    {
-        return switch (cause)
-        {
-            case "kimi" -> "review verdict";
-            case "corroborated" -> "corroborated by their own messages";
-            default -> cause;
         };
     }
 

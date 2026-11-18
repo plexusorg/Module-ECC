@@ -8,11 +8,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Set up JDK 21
+      - name: Check out Plex API source
+        uses: actions/checkout@v4
+        with:
+          repository: plexusorg/Plex
+          ref: c494adc698213734ac2663c9e0e3e4d9350893ca
+          path: .plex-ci
+          persist-credentials: false
+      - name: Set up JDK 25
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 25
           cache: gradle
       - name: Build with Gradle
-        run: chmod a+x gradlew && ./gradlew build --no-daemon
+        run: chmod a+x gradlew && ./gradlew build --include-build .plex-ci --no-daemon

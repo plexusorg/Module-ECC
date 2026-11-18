@@ -21,6 +21,10 @@ repositories {
         url = uri("https://repo.essentialsx.net/snapshots/")
     }
 
+    maven {
+        url = uri("https://nexus.scarsz.me/content/groups/public/")
+    }
+
     mavenCentral()
 }
 
@@ -30,6 +34,7 @@ dependencies {
     compileOnly(platform("com.intellectualsites.bom:bom-newest:1.56"))
     compileOnly("com.fastasyncworldedit:FastAsyncWorldEdit-Core")
     compileOnly("net.essentialsx:EssentialsX:2.22.1-SNAPSHOT")
+    compileOnly("com.discordsrv:discordsrv:1.30.5")
 }
 
 group = "dev.plex"

@@ -4,14 +4,14 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import dev.plex.api.logging.LoggingApi;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.apache.logging.log4j.Logger;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
 
-import java.time.Instant;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,13 +19,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 
 /**
- * The action loop: one thread that long-polls ECC-Server for actions, carries each out and acknowledges it. Actions
- * are applied idempotently by id: a mute or unmute sets the mute set, and a ban's Plex entry carries the action id in
- * its label. A failed action is acknowledged as failed and applied again on a backoff, before any later action for
- * the same player; other players' actions go on meanwhile. Each action carried out is shown to staff once. The loop
- * also replaces the mute set from the server at start and after every outage, and saves the mute set's changes.
+ * The action loop: one thread that long-polls ECC-Server for actions, carries each out and acknowledges it. A release
+ * delivers the held lines it names, in the order they were written; a warn shows the player the warning, unless they
+ * are quarantined; a ban writes the Plex entry, kicks and drops the player's held lines; a notice is shown to staff.
+ * Every action is safe to apply twice: a released line is no longer held, and a ban's Plex entry carries the action id
+ * in its label. A failed action is acknowledged as failed and applied again on a backoff, before any later action for
+ * the same player; other players' actions go on meanwhile. Each action carried out is shown to staff once.
  */
 final class Actions
 {
@@ -38,9 +40,12 @@ final class Actions
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
 
     private final EccServer server;
-    private final MuteSet muted;
+    private final Held held;
     private final Bans bans;
     private final Alerts alerts;
+    private final Component warning;
+    // Whether a player is quarantined now: they are shown no warning.
+    private final Predicate<UUID> quarantined;
     private final LoggingApi logging;
     private final Logger logger;
     private final Thread loop;
@@ -51,17 +56,19 @@ final class Actions
     // Ids this loop is done with although the server may still hold them: actions that cannot be carried out, and
     // done actions whose acknowledgement the server refused.
     private final Set<String> settled = new HashSet<>();
-    // One retry clock for everything that failed: unfinished actions, the mute set's refresh and its saving.
     private long retryMillis = EccServer.FIRST_RETRY_MILLIS;
     private long retryAt = System.nanoTime();
     private volatile int unacknowledged;
 
-    Actions(EccServer server, MuteSet muted, Bans bans, Alerts alerts, LoggingApi logging, Logger logger)
+    Actions(EccServer server, Held held, Bans bans, Alerts alerts, Component warning, Predicate<UUID> quarantined,
+            LoggingApi logging, Logger logger)
     {
         this.server = server;
-        this.muted = muted;
+        this.held = held;
         this.bans = bans;
         this.alerts = alerts;
+        this.warning = warning;
+        this.quarantined = quarantined;
         this.logging = logging;
         this.logger = logger;
         this.loop = Thread.ofPlatform().daemon().name("Plex-ECC-Actions").unstarted(this::run);
@@ -93,7 +100,7 @@ final class Actions
 
     private void run()
     {
-        long backoff = EccServer.FIRST_RETRY_MILLIS;
+        Backoff backoff = server.backoff();
         try
         {
             while (!Thread.currentThread().isInterrupted())
@@ -101,11 +108,10 @@ final class Actions
                 Next next = cycle();
                 if (next == Next.BACKOFF)
                 {
-                    Thread.sleep(backoff);
-                    backoff = Math.min(backoff * 2, EccServer.LAST_RETRY_MILLIS);
+                    backoff.pause();
                     continue;
                 }
-                backoff = EccServer.FIRST_RETRY_MILLIS;
+                backoff.reset();
                 if (next == Next.PACE)
                 {
                     Thread.sleep(PACE_MILLIS);
@@ -120,25 +126,18 @@ final class Actions
         {
             logger.error("Chat safety stopped carrying out ECC-Server's actions after a failure", ex);
         }
-        finally
-        {
-            save();
-        }
     }
 
     // One poll and the actions it returned.
     private Next cycle() throws InterruptedException
     {
         boolean due = System.nanoTime() - retryAt >= 0;
-        boolean failed = false;
         long started = System.nanoTime();
         JsonArray polled;
         try
         {
-            if (due)
-            {
-                failed = !refreshMuted();
-            }
+            // The poll may be held for 30 seconds; a restarted server is seen by its boot id at once.
+            server.checkBoot();
             polled = server.actions();
         }
         catch (EccServer.Unavailable ex)
@@ -167,7 +166,7 @@ final class Actions
         }
         List<Action> received = parse(polled);
         // The server still holds an action this loop is done with.
-        boolean held = received.size() < polled.size();
+        boolean stillHeld = received.size() < polled.size();
         for (Action action : received)
         {
             if (!unfinished.containsKey(action.idText()))
@@ -178,11 +177,10 @@ final class Actions
         Next next = apply(new ArrayList<>(batch.values()), blocked, due ? 0 : unfinished.size());
         if (due)
         {
-            failed |= !save();
-            retried(failed || next == Next.PACE);
+            retried(next == Next.PACE);
         }
         // NOW means nothing is unfinished; the server may still hold a settled action, or answer at once.
-        return next == Next.NOW && (held || fast && polled.isEmpty()) ? Next.PACE : next;
+        return next == Next.NOW && (stillHeld || fast && polled.isEmpty()) ? Next.PACE : next;
     }
 
     // Moves the retry clock after a cycle that retried what had failed.
@@ -231,11 +229,11 @@ final class Actions
             }
             if (ok && shown.add(action.idText()))
             {
-                show(action);
+                show(action, detail);
             }
             if (!acknowledge(action, ok, detail))
             {
-                // Applied again once the server answers; every action is idempotent.
+                // Applied again once the server answers; every action is safe to apply twice.
                 unfinished.putIfAbsent(action.idText(), action);
                 unacknowledged = waiting + batch.size() - done;
                 return Next.BACKOFF;
@@ -257,32 +255,45 @@ final class Actions
         return failed || !unfinished.isEmpty() ? Next.PACE : Next.NOW;
     }
 
-    // A mute or unmute takes effect in memory at once; the mute set is saved once the cycle's actions are applied.
     private String carryOut(Action action) throws Bans.Failed, InterruptedException
     {
         return switch (action.type())
         {
-            case MUTE ->
+            case RELEASE ->
             {
-                muted.add(action.uuid(), action.name());
-                yield "muted";
+                List<Held.Entry> released = held.release(action.uuid(), action.ids());
+                released.forEach(entry -> entry.delivery().deliver());
+                yield "delivered " + released.size() + " of " + action.ids().size() + " lines";
             }
-            case UNMUTE ->
+            case WARN ->
             {
-                muted.remove(action.uuid());
-                yield "unmuted";
+                Player player = Bukkit.getPlayer(action.uuid());
+                if (player == null)
+                {
+                    yield "offline, not shown";
+                }
+                if (quarantined.test(action.uuid()))
+                {
+                    yield "quarantined, not shown";
+                }
+                player.sendMessage(warning);
+                yield "shown";
             }
-            case BAN -> bans.ban(action);
-            case NOTICE -> "shown";
+            case NOTICE -> "shown to staff";
+            case BAN ->
+            {
+                String banned = bans.ban(action);
+                yield banned + "; dropped " + held.drop(action.uuid()) + " held lines";
+            }
         };
     }
 
     // An alert that cannot be shown is logged; the action it reports is still acknowledged as done.
-    private void show(Action action)
+    private void show(Action action, String detail)
     {
         try
         {
-            alerts.show(action);
+            alerts.show(action, detail);
         }
         catch (RuntimeException ex)
         {
@@ -312,67 +323,6 @@ final class Actions
             }
         }
         return true;
-    }
-
-    // Saves the mute set's changes, such as a mute or a kicked player leaving it.
-    private boolean save()
-    {
-        try
-        {
-            muted.flush();
-            return true;
-        }
-        catch (RuntimeException ex)
-        {
-            logger.error("Unable to save chat safety's mute set; it is saved again shortly", ex);
-            return false;
-        }
-    }
-
-    // Replaces the mute set from GET /muted when the link asks for it: at start, and after every outage. False when
-    // the server refused or returned an invalid set; actions are still carried out then.
-    private boolean refreshMuted() throws EccServer.Unavailable, InterruptedException
-    {
-        if (!server.takeRefresh())
-        {
-            return true;
-        }
-        try
-        {
-            muted.replace(mutedPlayers(server.muted()));
-            return true;
-        }
-        catch (EccServer.Unavailable ex)
-        {
-            server.refreshFailed();
-            throw ex;
-        }
-        catch (EccServer.Rejected ex)
-        {
-            server.refreshFailed();
-            logging.error("Unable to read ECC-Server's mute set: it {0}", MINI_MESSAGE.escapeTags(String.valueOf(ex.getMessage())));
-            return false;
-        }
-    }
-
-    private static Map<UUID, String> mutedPlayers(JsonArray players) throws EccServer.Rejected
-    {
-        Map<UUID, String> current = new HashMap<>();
-        for (JsonElement element : players)
-        {
-            if (!(element instanceof JsonObject player))
-            {
-                throw new EccServer.Rejected("returned a mute set entry that is not an object: " + element);
-            }
-            UUID uuid = uuid(player);
-            String name = string(player, "name");
-            if (uuid == null || name == null)
-            {
-                throw new EccServer.Rejected("returned a mute set entry without a valid uuid and name: " + player);
-            }
-            current.put(uuid, name);
-        }
-        return current;
     }
 
     // The polled actions to carry out, in the server's order.
@@ -406,30 +356,37 @@ final class Actions
             }
             return null;
         }
-        String invalidReason = null;
         Type type = Type.of(string(json, "type"));
         UUID uuid = uuid(json);
-        String name = string(json, "name");
-        String role = string(json, "role");
-        Why why = why(json, type);
-        Instant kickAt = null;
-        if (type == null || uuid == null || name == null || why == null)
-        {
-            invalidReason = "type, uuid, name or why is missing or invalid";
-        }
-        else if (type == Type.BAN)
-        {
-            kickAt = instant(string(json, "kick_at"));
-            if (kickAt == null || !Bans.OFFENDER.equals(role) && !Bans.AT_RISK.equals(role))
-            {
-                invalidReason = "a ban needs role offender or at_risk and an RFC 3339 kick_at";
-            }
-        }
+        String account = string(json, "account");
+        List<String> ids = ids(json);
+        String text = string(json, "text");
+        String invalidReason = invalid(type, uuid, ids, text);
         if (invalidReason == null)
         {
-            return new Action(id, id.getAsString(), type, uuid, name, role, kickAt, why);
+            return new Action(id, id.getAsString(), type, uuid, account, ids == null ? List.of() : ids, text);
         }
         reportInvalid(id, element, invalidReason);
+        return null;
+    }
+
+    // Why an action lacks a field its type needs, or null when it has them all.
+    @Nullable
+    private static String invalid(@Nullable Type type, @Nullable UUID uuid, @Nullable List<String> ids,
+                                  @Nullable String text)
+    {
+        if (type == Type.NOTICE)
+        {
+            return text == null ? "a notice needs its text" : null;
+        }
+        if (type == null || uuid == null)
+        {
+            return "type or uuid is missing or invalid";
+        }
+        if (type == Type.RELEASE && ids == null)
+        {
+            return "a release needs ids, a list of line ids";
+        }
         return null;
     }
 
@@ -459,25 +416,24 @@ final class Actions
         settled.add(id.getAsString());
     }
 
-    // Why the action was made, for staff only. Null unless the action carries the fields its type has.
+    // A list of strings, or null when the field is missing or holds anything else.
     @Nullable
-    private static Why why(JsonObject json, @Nullable Type type)
+    private static List<String> ids(JsonObject json)
     {
-        if (type == null || !(json.get("why") instanceof JsonObject why))
+        if (!(json.get("ids") instanceof JsonArray array))
         {
             return null;
         }
-        String channel = string(why, "channel");
-        String text = string(why, "text");
-        String cause = string(why, "cause");
-        String kind = string(why, "kind");
-        boolean complete = switch (type)
+        List<String> ids = new ArrayList<>();
+        for (JsonElement element : array)
         {
-            case MUTE -> channel != null && text != null;
-            case UNMUTE, BAN -> cause != null;
-            case NOTICE -> kind != null;
-        };
-        return complete ? new Why(channel, text, cause, kind) : null;
+            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString())
+            {
+                return null;
+            }
+            ids.add(element.getAsString());
+        }
+        return ids;
     }
 
     @Nullable
@@ -502,37 +458,23 @@ final class Actions
         }
     }
 
-    @Nullable
-    private static Instant instant(@Nullable String value)
-    {
-        try
-        {
-            return value == null ? null : Instant.parse(value);
-        }
-        catch (DateTimeParseException ex)
-        {
-            return null;
-        }
-    }
-
     // When the loop polls again: at once, after the pace gap, or after the growing backoff.
     private enum Next
     {
         NOW, PACE, BACKOFF
     }
 
-    // A notice is only shown to staff.
     enum Type
     {
-        MUTE, UNMUTE, BAN, NOTICE;
+        RELEASE, WARN, BAN, NOTICE;
 
         @Nullable
         static Type of(@Nullable String value)
         {
             return switch (value)
             {
-                case "mute" -> MUTE;
-                case "unmute" -> UNMUTE;
+                case "release" -> RELEASE;
+                case "warn" -> WARN;
                 case "ban" -> BAN;
                 case "notice" -> NOTICE;
                 case null, default -> null;
@@ -541,19 +483,12 @@ final class Actions
     }
 
     /**
-     * One action as ECC-Server sent it. {@code id} is kept as sent, for the acknowledgement. {@code role} and
-     * {@code kickAt} are set on bans only.
+     * One action as ECC-Server sent it. {@code id} is kept as sent, for the acknowledgement. {@code uuid} is set on
+     * every type but a notice, with {@code account}, the account name the module sent as the lines' speaker;
+     * {@code ids} on releases, {@code text} on notices.
      */
-    record Action(JsonElement id, String idText, Type type, UUID uuid, String name, @Nullable String role,
-                  @Nullable Instant kickAt, Why why)
-    {
-    }
-
-    /**
-     * An action's {@code why}: a mute's {@code channel} and {@code text}, an unmute's or a ban's {@code cause}, a
-     * notice's {@code kind}.
-     */
-    record Why(@Nullable String channel, @Nullable String text, @Nullable String cause, @Nullable String kind)
+    record Action(JsonElement id, String idText, Type type, @Nullable UUID uuid, @Nullable String account,
+                  List<String> ids, @Nullable String text)
     {
     }
 }

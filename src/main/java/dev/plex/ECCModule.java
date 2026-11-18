@@ -7,6 +7,7 @@ import dev.plex.ecc.safety.ChatSafety;
 import dev.plex.listener.ChannelSafetyListener;
 import dev.plex.listener.ChatListener;
 import dev.plex.listener.CommandListener;
+import dev.plex.listener.DiscordSrvHook;
 import dev.plex.listener.EssentialsSafetyListener;
 import dev.plex.listener.JoinListener;
 import dev.plex.listener.LoginListener;
@@ -29,6 +30,7 @@ public class ECCModule extends PlexModule
 {
     private static final String FAWE_PLUGIN = "FastAsyncWorldEdit";
     private static final String ESSENTIALS_PLUGIN = "Essentials";
+    private static final String DISCORDSRV_PLUGIN = "DiscordSRV";
     private static final String CHAT_SAFETY = "chat_safety";
 
     private ModuleConfiguration config;
@@ -38,6 +40,7 @@ public class ECCModule extends PlexModule
     private RaidDetector raidDetector;
     private FaweHook faweHook;
     private volatile @Nullable ChatSafety chatSafety;
+    private volatile @Nullable DiscordSrvHook discord;
     private volatile boolean enabled;
     private volatile int time;
     private volatile boolean shadowActive;
@@ -112,16 +115,7 @@ public class ECCModule extends PlexModule
     // Chat safety failing to start leaves NUSH running.
     private void startChatSafety()
     {
-        ChatSafety safety;
-        try
-        {
-            safety = ChatSafety.start(this, config.getConfigurationSection(CHAT_SAFETY));
-        }
-        catch (IllegalStateException ex)
-        {
-            getLogger().error("Chat safety stays off", ex);
-            return;
-        }
+        ChatSafety safety = ChatSafety.start(this, config.getConfigurationSection(CHAT_SAFETY));
         if (safety == null)
         {
             return;
@@ -129,26 +123,39 @@ public class ECCModule extends PlexModule
         chatSafety = safety;
         registerListener(new SafetyListener(this, safety));
         registerListener(new ChannelSafetyListener(safety));
+        if (Bukkit.getPluginManager().isPluginEnabled(DISCORDSRV_PLUGIN))
+        {
+            DiscordSrvHook hook = new DiscordSrvHook(getLogger(), safety);
+            registerListener(hook);
+            hook.subscribe();
+            discord = hook;
+        }
         if (Bukkit.getPluginManager().isPluginEnabled(ESSENTIALS_PLUGIN))
         {
-            registerListener(new EssentialsSafetyListener(safety, Bukkit.getPluginManager().getPlugin(ESSENTIALS_PLUGIN)));
+            registerListener(new EssentialsSafetyListener(this, safety,
+                    Bukkit.getPluginManager().getPlugin(ESSENTIALS_PLUGIN)));
         }
         else
         {
-            api().logging().warn("EssentialsX is not enabled; chat safety does not capture private messages, mail or /me");
+            api().logging().warn("EssentialsX is not enabled; chat safety does not check private messages, mail or /me");
         }
     }
 
     @Override
     public void disable()
     {
-        // Closed before it is cleared, so a muted player's chat stays shadowed until the listeners are gone.
         ChatSafety safety = chatSafety;
         if (safety != null)
         {
             safety.close();
         }
         chatSafety = null;
+        DiscordSrvHook hook = discord;
+        if (hook != null)
+        {
+            hook.unsubscribe();
+        }
+        discord = null;
         if (raidDetector != null)
         {
             raidDetector.close();
@@ -210,6 +217,13 @@ public class ECCModule extends PlexModule
     public ChatSafety chatSafety()
     {
         return chatSafety;
+    }
+
+    // Null while chat safety is off or DiscordSRV was not enabled when it started.
+    @Nullable
+    public DiscordSrvHook discord()
+    {
+        return discord;
     }
 
     public synchronized void toggle(boolean toggle)

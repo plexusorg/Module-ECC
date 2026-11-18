@@ -5,48 +5,40 @@ import dev.plex.api.logging.LoggingApi;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.jetbrains.annotations.Nullable;
 
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Captured messages on their way to ECC-Server. Capture only appends here, so chat never waits for the server; one
- * sender thread posts the messages in capture order and, while the server is unreachable, keeps them and resends in
- * order. Each player may have a bounded number waiting; past it, their oldest is dropped.
+ * Posts that wait for no answer: presence, and lines whose verdict is not used that did not reach ECC-Server when
+ * they were sent. One sender thread posts them in order and, while ECC-Server is unreachable, keeps them and resends
+ * in order. Past the limit the oldest is dropped.
  */
 final class Outbox
 {
-    private static final int PLAYER_LIMIT = 500;
+    private static final int LIMIT = 5000;
     // How long stopping waits for the sender to deliver what is still waiting.
     private static final long DRAIN_MILLIS = TimeUnit.SECONDS.toMillis(5);
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
-    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSSXXX")
-            .withZone(ZoneOffset.UTC);
 
     private final EccServer server;
     private final LoggingApi logger;
     private final Thread sender;
+    private final Backoff backoff;
     private final Object lock = new Object();
-    // Guarded by lock. Every waiting message in capture order, and the same messages by player.
-    private final LinkedHashSet<Waiting> waiting = new LinkedHashSet<>();
-    private final Map<UUID, ArrayDeque<Waiting>> players = new HashMap<>();
-    // Guarded by lock. Taken from waiting and not yet accepted by the server.
-    private @Nullable Waiting sending;
-    // Guarded by lock. Messages dropped since the last warning about it.
+    // Guarded by lock.
+    private final ArrayDeque<Post> waiting = new ArrayDeque<>();
+    // Guarded by lock. Posts dropped since the last warning about it.
     private int dropped;
     private boolean closing;
+    // Guarded by lock. Set when a post did not reach the server, until nothing is waiting.
+    private boolean resending;
 
     Outbox(EccServer server, LoggingApi logger)
     {
         this.server = server;
         this.logger = logger;
         this.sender = Thread.ofPlatform().daemon().name("Plex-ECC-Sender").unstarted(this::run);
+        this.backoff = server.backoff();
     }
 
     void start()
@@ -54,8 +46,7 @@ final class Outbox
         sender.start();
     }
 
-    // Stamps the message with the capture time, in the same order as the messages are sent.
-    void add(UUID speaker, JsonObject message)
+    void add(String path, JsonObject body)
     {
         synchronized (lock)
         {
@@ -63,25 +54,23 @@ final class Outbox
             {
                 return;
             }
-            message.addProperty("time", TIME.format(Instant.now()));
-            Waiting entry = new Waiting(speaker, message);
-            ArrayDeque<Waiting> own = players.computeIfAbsent(speaker, uuid -> new ArrayDeque<>());
-            if (own.size() >= PLAYER_LIMIT)
+            if (waiting.size() >= LIMIT)
             {
-                waiting.remove(own.pollFirst());
+                waiting.pollFirst();
                 dropped++;
             }
-            own.addLast(entry);
-            waiting.add(entry);
+            waiting.addLast(new Post(path, body));
             lock.notifyAll();
         }
     }
 
-    int size()
+    // True while a post that did not reach the server waits to be sent again: a later line goes behind it, so lines
+    // reach the server in the order they were written.
+    boolean resending()
     {
         synchronized (lock)
         {
-            return waiting.size() + (sending == null ? 0 : 1);
+            return resending;
         }
     }
 
@@ -93,6 +82,7 @@ final class Outbox
             closing = true;
             lock.notifyAll();
         }
+        backoff.wake();
         try
         {
             sender.join(DRAIN_MILLIS);
@@ -104,10 +94,14 @@ final class Outbox
             Thread.currentThread().interrupt();
         }
         reportDropped();
-        int unsent = size();
+        int unsent;
+        synchronized (lock)
+        {
+            unsent = waiting.size();
+        }
         if (unsent > 0)
         {
-            logger.warn("Chat safety stopped with {0} chat messages not sent to ECC-Server", unsent);
+            logger.warn("Chat safety stopped with {0} lines and presence changes not sent to ECC-Server", unsent);
         }
     }
 
@@ -115,12 +109,16 @@ final class Outbox
     {
         try
         {
-            Waiting next;
+            Post next;
             while ((next = take()) != null && deliver(next))
             {
                 synchronized (lock)
                 {
-                    sending = null;
+                    waiting.remove(next);
+                    if (waiting.isEmpty())
+                    {
+                        resending = false;
+                    }
                 }
                 reportDropped();
             }
@@ -132,9 +130,9 @@ final class Outbox
         }
     }
 
-    // The oldest waiting message, or null once stopping with nothing left.
+    // The oldest waiting post, left in the queue until it is delivered; null once stopping with nothing left.
     @Nullable
-    private Waiting take() throws InterruptedException
+    private Post take() throws InterruptedException
     {
         synchronized (lock)
         {
@@ -142,57 +140,43 @@ final class Outbox
             {
                 lock.wait();
             }
-            if (waiting.isEmpty())
-            {
-                return null;
-            }
-            Waiting next = waiting.removeFirst();
-            ArrayDeque<Waiting> own = players.get(next.speaker());
-            own.pollFirst();
-            if (own.isEmpty())
-            {
-                players.remove(next.speaker());
-            }
-            sending = next;
-            return next;
+            return waiting.peekFirst();
         }
     }
 
-    // Sends the message until the server accepts or refuses it. False when stopping while the server is unreachable.
-    private boolean deliver(Waiting next) throws InterruptedException
+    // Sends the post until the server accepts or refuses it. False when stopping while the server is unreachable.
+    private boolean deliver(Post next) throws InterruptedException
     {
-        long retry = EccServer.FIRST_RETRY_MILLIS;
+        backoff.reset();
         while (true)
         {
             try
             {
-                server.postMessage(next.message());
+                server.post(next.path(), next.body());
                 return true;
             }
             catch (EccServer.Rejected ex)
             {
-                logger.error("ECC-Server refused chat message {0}, which is not sent again: it {1}",
-                        MINI_MESSAGE.escapeTags(String.valueOf(next.message().get("id").getAsString())), MINI_MESSAGE.escapeTags(String.valueOf(ex.getMessage())));
+                logger.error("ECC-Server refused {0} {1}, which is not sent again: it {2}",
+                        next.path(), MINI_MESSAGE.escapeTags(next.body().toString()),
+                        MINI_MESSAGE.escapeTags(String.valueOf(ex.getMessage())));
                 return true;
             }
             catch (EccServer.Unavailable ex)
             {
-                // Waits on the lock, so close() ends the backoff at once; new messages do not.
-                long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retry);
                 synchronized (lock)
                 {
-                    long left = retry;
-                    while (!closing && left > 0)
-                    {
-                        lock.wait(left);
-                        left = TimeUnit.NANOSECONDS.toMillis(until - System.nanoTime());
-                    }
+                    resending = true;
+                }
+                // close() ends the wait at once; new posts do not.
+                backoff.pause();
+                synchronized (lock)
+                {
                     if (closing)
                     {
                         return false;
                     }
                 }
-                retry = Math.min(retry * 2, EccServer.LAST_RETRY_MILLIS);
             }
         }
     }
@@ -207,31 +191,23 @@ final class Outbox
         }
         if (count > 0)
         {
-            logger.warn("Chat safety dropped {0} chat messages before ECC-Server took them, each the oldest of a player"
-                    + " who had {1} waiting", count, PLAYER_LIMIT);
+            logger.warn("Chat safety dropped the {0} oldest posts to ECC-Server, which had {1} waiting", count, LIMIT);
         }
     }
 
-    // Compared by identity, so the buffer removes exactly the dropped message.
-    private static final class Waiting
+    // Compared by identity, so removing a delivered post removes exactly it.
+    private record Post(String path, JsonObject body)
     {
-        private final UUID speaker;
-        private final JsonObject message;
-
-        private Waiting(UUID speaker, JsonObject message)
+        @Override
+        public boolean equals(Object other)
         {
-            this.speaker = speaker;
-            this.message = message;
+            return this == other;
         }
 
-        private UUID speaker()
+        @Override
+        public int hashCode()
         {
-            return speaker;
-        }
-
-        private JsonObject message()
-        {
-            return message;
+            return System.identityHashCode(this);
         }
     }
 }
