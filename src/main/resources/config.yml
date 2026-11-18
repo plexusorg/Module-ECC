@@ -52,13 +52,12 @@ chat_safety:
   # Links to allow. Add a host or a host and path prefix, such as "example.org/news".
   allowed_links: []
 
-  # Shown to a player when their line is held. MiniMessage.
+  # Shown to a player when their line is held.
   notice: "<gray>Your message was not sent. It is being checked."
 
   # Shown to a player when ECC-Server warns them; a quarantined player is not shown it. Their held lines stay held.
-  # MiniMessage.
   warning: "<red>Your messages were not sent. Do not ask for or give contact details or personal information, move players to other servers or apps, or aim sexual or romantic talk at players."
 
   # Shown when an anvil rename passed the check after the click was stopped: the player takes the item again to keep
-  # the name. MiniMessage.
+  # the name.
   item_name_checked: "<gray>Your item name was checked. Take the item again to rename it."
