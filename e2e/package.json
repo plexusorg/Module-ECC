@@ -1,9 +1,0 @@
-{
-  "name": "module-ecc-e2e",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "mineflayer": "4.39.0",
-    "vec3": "0.1.10"
-  }
-}
