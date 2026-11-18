@@ -368,7 +368,7 @@ public class SafetyListener implements Listener
         if (!safety.check(player, line, () ->
         {
             checkedNames.put(uuid, stripped);
-            player.sendMessage(safety.itemNameChecked());
+            player.sendMessage(module.messageComponent("chatSafetyItemNameChecked"));
         }))
         {
             event.setCancelled(true);

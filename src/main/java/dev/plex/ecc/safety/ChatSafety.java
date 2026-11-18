@@ -61,7 +61,6 @@ public final class ChatSafety implements Listener
     private static final Key GUILD_CHAT = Key.key("guilds", "chat");
     private static final String LINE = "/line";
     private static final String PRESENCE = "/presence";
-    private static final Component SHORTEN_NOTICE = Component.text("Shorten this text, then try again.");
     // How much longer than the verdict timeout a waiting thread allows the HTTP client to report it.
     private static final long GRACE_MILLIS = 250;
     private static final Duration RETRY_TIMEOUT = Duration.ofSeconds(10);
@@ -82,6 +81,7 @@ public final class ChatSafety implements Listener
     private final AtomicBoolean restarted = new AtomicBoolean();
     private final Sudo sudo = new Sudo();
     private final Component notice;
+    private final Component shortenNotice;
     // Each player's last line from a main-thread channel, so their lines are delivered in the order written.
     private final Map<UUID, CompletableFuture<Void>> order = new ConcurrentHashMap<>();
     private volatile boolean closing;
@@ -94,10 +94,11 @@ public final class ChatSafety implements Listener
         this.server = new EccServer(settings.eccServer(), settings.token(), module.api().logging());
         this.outbox = new Outbox(server, module.api().logging());
         this.alerts = new Alerts(module);
-        this.notice = MINI_MESSAGE.deserialize(settings.notice());
+        this.notice = module.messageComponent("chatSafetyHeldNotice");
+        this.shortenNotice = module.messageComponent("chatSafetyShortenNotice");
         Bans bans = new Bans(module);
         // A quarantined player's chat reaches no one else, which a warning would tell them.
-        this.actions = new Actions(server, held, bans, alerts, MINI_MESSAGE.deserialize(settings.warning()),
+        this.actions = new Actions(server, held, bans, alerts, module.messageComponent("chatSafetyWarning"),
                 uuid -> module.isEnabled() && module.quarantine().isRestricted(uuid), module.api().logging(), logger);
         this.asker = Thread.ofPlatform().daemon().name("Plex-ECC-Asker").unstarted(this::askAgain);
         this.askBackoff = server.backoff();
@@ -350,7 +351,7 @@ public final class ChatSafety implements Listener
     {
         if (held.deliver(line.id()) != null && player != null && !closing)
         {
-            player.sendMessage(SHORTEN_NOTICE);
+            player.sendMessage(shortenNotice);
         }
     }
 
@@ -518,11 +519,6 @@ public final class ChatSafety implements Listener
     public Duration verdictTimeout()
     {
         return settings.verdictTimeout();
-    }
-
-    public Component itemNameChecked()
-    {
-        return MINI_MESSAGE.deserialize(settings.itemNameChecked());
     }
 
     /**

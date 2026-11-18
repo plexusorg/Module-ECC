@@ -12,7 +12,7 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 
 public record SafetySettings(URI eccServer, String token, Duration verdictTimeout, List<String> trustedGroups,
-                             List<String> allowedLinks, String notice, String warning, String itemNameChecked)
+                             List<String> allowedLinks)
 {
     private static final int MIN_TIMEOUT_MILLIS = 50;
     private static final int MAX_TIMEOUT_MILLIS = 10_000;
@@ -70,25 +70,12 @@ public record SafetySettings(URI eccServer, String token, Duration verdictTimeou
                         + " example.org or discord.gg/invite-code, written without http:// or https://");
             }
         }
-        String notice = text(section, "notice", errors);
-        String warning = text(section, "warning", errors);
-        String itemNameChecked = text(section, "item_name_checked", errors);
         if (eccServer == null || token.isEmpty() || !errors.isEmpty())
         {
             return null;
         }
         return new SafetySettings(eccServer, token, Duration.ofMillis(timeout), List.copyOf(trustedGroups),
-                List.copyOf(allowedLinks), notice, warning, itemNameChecked);
-    }
-
-    private static String text(ConfigurationSection section, String key, List<String> errors)
-    {
-        String value = section.getString(key, "");
-        if (value.isBlank())
-        {
-            errors.add("chat_safety." + key + " is empty");
-        }
-        return value;
+                List.copyOf(allowedLinks));
     }
 
     @Nullable
