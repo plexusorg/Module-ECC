@@ -8,7 +8,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * How the training pipeline (Module-ECC's {@code ecc.dossier} and {@code ecc.ingest}, in Python) read a line from the
+ * How the training pipeline (ECC-ML's {@code ecc.transcript} and {@code ecc.parse}, in Python) read a line from the
  * server's log, so that a line goes to ECC-Server split into speaker, name and text as training split it. Whitespace
  * is Python's {@code str.isspace()} set, which Java's {@link Character#isWhitespace} and {@link String#strip} do not
  * match (they leave U+00A0, U+2007 and U+202F).
@@ -18,15 +18,15 @@ public final class LogReading
     // Python's str.isspace() characters, which are also what its re module's \s matches in a str pattern.
     private static final String SPACE = "\\t\\n\\u000B\\f\\r\\u001C-\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A"
             + "\\u2028\\u2029\\u202F\\u205F\\u3000";
-    // dossier.py: re.sub(r"^(?:set|add|-o)\s+(?:\d+\s+)?", "", text, flags=re.I). Under re.I, s also matches U+017F;
+    // transcript.py: re.sub(r"^(?:set|add|-o)\s+(?:\d+\s+)?", "", text, flags=re.I). Under re.I, s also matches U+017F;
     // \d is Unicode's decimal digits.
     private static final Pattern COMMAND_PREFIX = Pattern.compile(
             "^(?:[sS\\u017F][eE][tT]|[aA][dD][dD]|-[oO])[" + SPACE + "]+(?:\\p{Nd}+[" + SPACE + "]+)?");
     private static final Set<String> COMMAND_SKIPPED = Set.of("clear", "remove", "off");
-    // ingest.py VANILLA: a chat line in Minecraft's own format, "<name> text".
+    // parse.py VANILLA: a chat line in Minecraft's own format, "<name> text".
     private static final Pattern VANILLA = Pattern.compile("^<([^<>" + SPACE + "]+)> (.*)$", Pattern.DOTALL);
     private static final String SEPARATOR = " » ";
-    // dossier.py DISCORD, verbatim, with re.S.
+    // transcript.py DISCORD, verbatim, with re.S.
     private static final Pattern DISCORD = Pattern.compile("^\\[DiscordSRV\\] Chat: (?:\\[Discord[^\\]]*\\]|<[^>]*>"
             + "\\[<[^>]*>Discord</[^>]*>\\]</[^>]*>) (.*?) (?:>|<gray>></gray>) (.*)$",
             Pattern.DOTALL | Pattern.UNIX_LINES);
@@ -68,7 +68,7 @@ public final class LogReading
 
     /**
      * The text of a command that sets a sign, an item's name or lore, or a tag, from the arguments as typed
-     * ({@code dossier.py} 307-312): a leading set, add or -o and an optional number are removed. Null when nothing is
+     * (the sign, item and tag commands in {@code transcript.py}): a leading set, add or -o and an optional number are removed. Null when nothing is
      * left, or what is left is clear, remove or off.
      */
     @Nullable

@@ -70,7 +70,7 @@ public class SafetyListener implements Listener
         this.safety = safety;
     }
 
-    // /nick as the training pipeline read it from the command's log line (ingest.command and dossier.py): the
+    // /nick as the training pipeline read it from the command's log line (parse.command and transcript.py): the
     // nickname is the arguments, or what follows the first word when that word is an online player's name and more
     // follows; then that player's nickname is set, and the line names them as its target when it is not the author.
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
