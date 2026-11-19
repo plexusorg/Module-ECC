@@ -32,6 +32,13 @@ public class ECCModule extends PlexModule
     private static final String ESSENTIALS_PLUGIN = "Essentials";
     private static final String DISCORDSRV_PLUGIN = "DiscordSRV";
     private static final String CHAT_SAFETY = "chat_safety";
+    // The staff feed's interval, and how many restricted players speaking in one interval turn it into a digest.
+    private static final int FEED_INTERVAL_SECONDS = 10;
+    private static final int FEED_DIGEST_PLAYERS = 5;
+    // The /nush log entries kept per restricted player.
+    private static final int LOG_SIZE = 50;
+    // Manual activation and an enabled start restrict players who joined within this many minutes.
+    private static final int RECENT_JOIN_MINUTES = 5;
 
     private ModuleConfiguration config;
     private ScheduledExecutorService executor;
@@ -65,15 +72,11 @@ public class ECCModule extends PlexModule
         config.load();
         enabled = config.getBoolean("server.enabled", false);
         time = requireAtLeastOne("server.wait_time", config.getInt("server.wait_time", 5));
-        int intervalSeconds = requireAtLeastOne("feed.interval_seconds", config.getInt("feed.interval_seconds", 10));
-        int digestThreshold = requireAtLeastOne("feed.digest_threshold", config.getInt("feed.digest_threshold", 5));
-        int recentJoinMinutes = requireAtLeastOne("server.recent_join_minutes", config.getInt("server.recent_join_minutes", 5));
-        int logSize = requireAtLeastOne("log.size", config.getInt("log.size", 50));
 
         executor = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofPlatform().daemon().name("Plex-NUSH").factory());
-        feed = new StaffFeed(this, executor, intervalSeconds, digestThreshold);
-        quarantine = new Quarantine(this, feed, executor, logSize, recentJoinMinutes);
+        feed = new StaffFeed(this, executor, FEED_INTERVAL_SECONDS, FEED_DIGEST_PLAYERS);
+        quarantine = new Quarantine(this, feed, executor, LOG_SIZE, RECENT_JOIN_MINUTES);
         raidDetector = new RaidDetector(this, feed);
 
         registerListener(new LoginListener(this));

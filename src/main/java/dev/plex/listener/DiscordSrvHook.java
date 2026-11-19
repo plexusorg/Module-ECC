@@ -3,6 +3,7 @@ package dev.plex.listener;
 import dev.plex.ecc.safety.ChatSafety;
 import dev.plex.ecc.safety.Line;
 import dev.plex.ecc.safety.LogReading;
+import dev.plex.ecc.safety.SafetySettings;
 import github.scarsz.discordsrv.DiscordSRV;
 import github.scarsz.discordsrv.api.ListenerPriority;
 import github.scarsz.discordsrv.api.Subscribe;
@@ -55,7 +56,7 @@ public final class DiscordSrvHook implements Listener
         this.discord = DiscordSRV.getPlugin();
         this.safety = safety;
         this.logger = logger;
-        this.waitMillis = safety.verdictTimeout().toMillis() + GRACE_MILLIS;
+        this.waitMillis = SafetySettings.VERDICT_TIMEOUT.toMillis() + GRACE_MILLIS;
     }
 
     public void subscribe()

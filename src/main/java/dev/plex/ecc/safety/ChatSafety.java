@@ -135,7 +135,7 @@ public final class ChatSafety implements Listener
         module.registerListener(safety.sudo);
         module.api().logging().info("Chat safety is on with ECC-Server at {0}; a line waits up to {1} ms for its"
                         + " verdict", MINI_MESSAGE.escapeTags(String.valueOf(settings.eccServer())),
-                settings.verdictTimeout().toMillis());
+                SafetySettings.VERDICT_TIMEOUT.toMillis());
         return safety;
     }
 
@@ -166,7 +166,7 @@ public final class ChatSafety implements Listener
         {
             return false;
         }
-        long timeout = settings.verdictTimeout().toMillis();
+        long timeout = SafetySettings.VERDICT_TIMEOUT.toMillis();
         EccServer.Verdict verdict;
         try
         {
@@ -338,7 +338,7 @@ public final class ChatSafety implements Listener
     {
         try
         {
-            return server.line(line.json(), settings.verdictTimeout());
+            return server.line(line.json(), SafetySettings.VERDICT_TIMEOUT);
         }
         catch (RuntimeException ex)
         {
@@ -514,11 +514,6 @@ public final class ChatSafety implements Listener
         {
             logger.error("Chat safety stopped asking ECC-Server again about unanswered lines after a failure", ex);
         }
-    }
-
-    public Duration verdictTimeout()
-    {
-        return settings.verdictTimeout();
     }
 
     /**

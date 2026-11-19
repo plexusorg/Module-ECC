@@ -9,22 +9,6 @@ server:
   # The minimum is 1 minute.
   wait_time: 5
 
-  # For manual activation and enabled startup, restrict players who joined within this many minutes.
-  # Automatic activation selects spike contributors instead. Restrict new arrivals in either mode.
-  recent_join_minutes: 5
-
-feed:
-  # How many seconds one staff feed interval lasts
-  interval_seconds: 10
-
-  # How many different restricted players must speak in one interval before NUSH
-  # stops showing single lines and sends one digest instead
-  digest_threshold: 5
-
-log:
-  # How many log entries NUSH keeps for each restricted player - see /nush log
-  size: 50
-
 chat_safety:
   # ECC-Server checks every line a player writes (chat, guild chat, private messages, mail, /me, signs, books, item
   # names, nicknames, tags) before anyone else sees it. It answers deliver or hold; a held line stays undelivered until ECC-Server
@@ -34,14 +18,10 @@ chat_safety:
 
   # ECC-Server's address as the game server reaches it, for example "http://172.17.0.1:8790" from a container on the
   # default Docker bridge. Must match ECC-Server's `listen`.
-  model_host: "http://127.0.0.1:8790"
+  ecc_server: "http://127.0.0.1:8790"
 
   # ECC-Server's token: the output of `sudo ecc-server token`. Required; chat safety stays off while it is empty.
   token: ""
-
-  # How long a line waits for ECC-Server's verdict, in milliseconds (50 to 10000). A line with no verdict by then is
-  # held, and asked about again until ECC-Server answers.
-  verdict_timeout_ms: 1000
 
   # LuckPerms groups whose players are trusted: their lines are delivered at once, without waiting for ECC-Server, and
   # ECC-Server keeps them as context for other players' lines only. Players granted plex.ecc.chat.bypass are trusted
