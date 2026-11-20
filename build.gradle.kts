@@ -2,6 +2,7 @@ plugins {
     java
     checkstyle
     `maven-publish`
+    id("dev.plex.updater") version "1.1"
 }
 
 repositories {
