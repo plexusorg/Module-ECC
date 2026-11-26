@@ -9,6 +9,7 @@ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.block.BlockState;
 import org.bukkit.block.Sign;
 import org.bukkit.block.sign.Side;
 import org.bukkit.block.sign.SignSide;
@@ -26,6 +27,7 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.BookMeta;
 import org.bukkit.inventory.view.AnvilView;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,8 +42,9 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * /nick, Minecraft's own message commands, the commands that set signs, item names and tags, signs, books and anvil
  * item names. Each is stopped until ECC-Server lets it through, then carried out by the module: the command is run
- * again as its author, the sign's text is written, the book's edit is applied. A sign shows its new text to its author
- * alone meanwhile. An anvil click cannot be resumed, so a checked name is let through on the author's next click.
+ * again as its author, the sign's text is written, the book's edit is applied, and Oasis logs the sign and the book
+ * as their author's edits. A sign shows its new text to its author alone meanwhile. An anvil click cannot be
+ * resumed, so a checked name is let through on the author's next click.
  */
 public class SafetyListener implements Listener
 {
@@ -61,13 +64,16 @@ public class SafetyListener implements Listener
 
     private final ECCModule module;
     private final ChatSafety safety;
+    // Null while Oasis is not enabled.
+    private final @Nullable OasisHook oasis;
     // Item names ECC-Server let through, by author, until their next click on an anvil result with that name.
     private final Map<UUID, String> checkedNames = new ConcurrentHashMap<>();
 
-    public SafetyListener(ECCModule module, ChatSafety safety)
+    public SafetyListener(ECCModule module, ChatSafety safety, @Nullable OasisHook oasis)
     {
         this.module = module;
         this.safety = safety;
+        this.oasis = oasis;
     }
 
     // /nick as the training pipeline read it from the command's log line (parse.command and transcript.py): the
@@ -219,8 +225,10 @@ public class SafetyListener implements Listener
         Location location = event.getBlock().getLocation();
         Side side = event.getSide();
         Line line = Line.of(player, ChatSafety.SIGN, text.toString());
-        if (safety.check(player, line, () -> module.ownTask(Bukkit.getRegionScheduler().run(module.plugin(), location,
-                task -> writeSign(location, side, lines)))))
+        // Oasis reads the blank side one tick after this event, so the text is written two ticks after the approval
+        // at the soonest, and the text's row always follows the blank one.
+        if (safety.check(player, line, () -> module.ownTask(Bukkit.getRegionScheduler().runDelayed(module.plugin(),
+                location, task -> writeSign(uuid, location, side, lines), 2))))
         {
             return;
         }
@@ -233,8 +241,9 @@ public class SafetyListener implements Listener
                 task -> showOwnSign(player, location, side, lines), 1));
     }
 
-    // Writes the checked text, unless the side was broken or written on meanwhile.
-    private void writeSign(Location location, Side side, List<Component> lines)
+    // Writes the checked text, unless the side was broken or written on meanwhile, and logs the write to Oasis as the
+    // author's edit.
+    private void writeSign(UUID author, Location location, Side side, List<Component> lines)
     {
         if (!(location.getBlock().getState() instanceof Sign sign))
         {
@@ -248,11 +257,16 @@ public class SafetyListener implements Listener
             module.getLogger().info("Not writing a checked sign at {}: it was written on meanwhile", location);
             return;
         }
+        BlockState before = location.getBlock().getState();
         for (int i = 0; i < lines.size(); i++)
         {
             signSide.line(i, lines.get(i));
         }
         sign.update();
+        if (oasis != null)
+        {
+            oasis.signWritten(author, before, sign);
+        }
     }
 
     private void showOwnSign(Player player, Location location, Side side, List<Component> lines)
@@ -304,7 +318,8 @@ public class SafetyListener implements Listener
         }
     }
 
-    // Applies the checked edit to the book it was made on, if that book is still in the same slot and unchanged.
+    // Applies the checked edit to the book it was made on, if that book is still in the same slot and unchanged, and
+    // logs it to Oasis as the author's edit.
     private void applyBook(Player player, EquipmentSlot hand, int slot, BookMeta previous, BookMeta next,
                            boolean signing)
     {
@@ -319,7 +334,8 @@ public class SafetyListener implements Listener
                 return;
             }
             ItemStack edited = signing ? item.withType(Material.WRITTEN_BOOK) : item;
-            edited.setItemMeta(signing ? signed(next) : next);
+            BookMeta applied = signing ? signed(next) : next;
+            edited.setItemMeta(applied);
             if (hand == null)
             {
                 player.getInventory().setItem(slot, edited);
@@ -327,6 +343,10 @@ public class SafetyListener implements Listener
             else
             {
                 player.getInventory().setItem(hand, edited);
+            }
+            if (oasis != null)
+            {
+                oasis.bookWritten(player.getUniqueId(), player.getLocation(), applied);
             }
         }, null)) == null)
         {

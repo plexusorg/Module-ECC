@@ -11,6 +11,7 @@ import dev.plex.listener.DiscordSrvHook;
 import dev.plex.listener.EssentialsSafetyListener;
 import dev.plex.listener.JoinListener;
 import dev.plex.listener.LoginListener;
+import dev.plex.listener.OasisHook;
 import dev.plex.listener.SafetyListener;
 import dev.plex.module.PlexModule;
 import dev.plex.ecc.nush.FaweHook;
@@ -31,6 +32,7 @@ public class ECCModule extends PlexModule
     private static final String FAWE_PLUGIN = "FastAsyncWorldEdit";
     private static final String ESSENTIALS_PLUGIN = "Essentials";
     private static final String DISCORDSRV_PLUGIN = "DiscordSRV";
+    private static final String OASIS_PLUGIN = "Oasis";
     private static final String CHAT_SAFETY = "chat_safety";
     // The staff feed's interval, and how many restricted players speaking in one interval turn it into a digest.
     private static final int FEED_INTERVAL_SECONDS = 10;
@@ -124,7 +126,8 @@ public class ECCModule extends PlexModule
             return;
         }
         chatSafety = safety;
-        registerListener(new SafetyListener(this, safety));
+        registerListener(new SafetyListener(this, safety,
+                Bukkit.getPluginManager().isPluginEnabled(OASIS_PLUGIN) ? new OasisHook(plugin()) : null));
         registerListener(new ChannelSafetyListener(safety));
         if (Bukkit.getPluginManager().isPluginEnabled(DISCORDSRV_PLUGIN))
         {

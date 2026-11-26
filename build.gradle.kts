@@ -6,6 +6,18 @@ plugins {
 }
 
 repositories {
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "oasis"
+                url = uri("https://telesphorepo.com/maven/oasis-snapshots/")
+            }
+        }
+        filter {
+            includeGroup("com.oasis")
+        }
+    }
+
     maven {
         url = uri("https://repo.papermc.io/repository/maven-public/")
     }
@@ -36,6 +48,7 @@ dependencies {
     compileOnly("com.fastasyncworldedit:FastAsyncWorldEdit-Core:2.16.2")
     compileOnly("net.essentialsx:EssentialsX:2.22.1-SNAPSHOT")
     compileOnly("com.discordsrv:discordsrv:1.30.5")
+    compileOnly("com.oasis:oasis-api:3.0-SNAPSHOT")
 }
 
 group = "dev.plex"
